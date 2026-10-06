@@ -109,6 +109,9 @@ pub struct OutputMeta {
     pub progress_append: Vec<String>,
     /// Whether a transient progress block should replace the previous block.
     pub progress_replace: bool,
+    /// Human-only cap on rows shown; pipeline stages clear it because they
+    /// work on, and show, every row.
+    pub display_limit: Option<usize>,
 }
 
 /// Suggested render target for a command result.
@@ -211,6 +214,7 @@ impl OutputResult {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
             },
         }
     }

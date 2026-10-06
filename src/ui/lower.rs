@@ -81,6 +81,21 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
         };
     }
 
+    // Display limits shorten only what a person reads; JSON keeps every row.
+    let limited;
+    let (output, shortened) = match output.meta.display_limit {
+        Some(limit) if plan.format != OutputFormat::Json => {
+            match limit_for_display(output, limit) {
+                Some((result, total)) => {
+                    limited = result;
+                    (&limited, Some((limit, total)))
+                }
+                None => (output, None),
+            }
+        }
+        _ => (output, None),
+    };
+
     let guide = GuideView::try_from_output_result(output);
 
     // Human projection is deliberately downstream of filtering and JSON output.
@@ -156,6 +171,13 @@ pub fn lower_output(output: &OutputResult, plan: &RenderPlan) -> Doc {
     };
     if plan.format != OutputFormat::Json {
         sanitize_doc(&mut doc);
+    }
+    if let Some((shown, total)) = shortened {
+        doc.blocks.push(Block::Paragraph(ParagraphBlock {
+            text: format!("Showing {shown} of {total} rows. Pipes and --json see every row."),
+            indent: 0,
+            inline_markup: false,
+        }));
     }
     doc
 }
@@ -520,6 +542,34 @@ pub(crate) fn lower_guide_help_layout(
         GuidePresentation::HelpLayout(layout, show_footer_rule),
         Some(&plan.settings.help_chrome),
     )
+}
+
+/// Shortens a long row set, or the long lists inside a one-record document,
+/// to `limit` entries. Returns the shortened result and the longest original
+/// length, or `None` when nothing exceeds the limit.
+fn limit_for_display(output: &OutputResult, limit: usize) -> Option<(OutputResult, usize)> {
+    let OutputItems::Rows(rows) = &output.items else {
+        return None;
+    };
+    let mut limited = output.clone();
+    let OutputItems::Rows(limited_rows) = &mut limited.items else {
+        return None;
+    };
+    let mut total = 0;
+    if rows.len() > limit {
+        total = rows.len();
+        limited_rows.truncate(limit);
+    } else if let [record] = limited_rows.as_mut_slice() {
+        for value in record.values_mut() {
+            if let Value::Array(items) = value
+                && items.len() > limit
+            {
+                total = total.max(items.len());
+                items.truncate(limit);
+            }
+        }
+    }
+    (total > 0).then_some((limited, total))
 }
 
 pub(crate) fn json_value(output: &OutputResult) -> Value {

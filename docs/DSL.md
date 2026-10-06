@@ -98,6 +98,12 @@ The existing `VAL` spelling remains supported. No new verb synonyms are added.
 Verbs are case-insensitive. An unknown single-letter verb is an error;
 ordinary unregistered words are quick-search text.
 
+Keys may use the column labels a table shows (`F state=failed` on a STATE
+column resolves to its field). A key that matches no field in any row is an
+error listing the columns, not an empty result or a single `null` group.
+Shape-changing stages (`G`, `A`, `Z`) derive their columns from the result but
+keep field formatting such as relative times for fields that survive.
+
 ## Matching and selectors
 
 Quick search supports these prefixes, with or without intervening spaces:
@@ -178,7 +184,10 @@ replace its member rows.
 
 ## Groups and empty selections
 
-`G` keeps group keys, aggregate values and member rows distinct. Row operations
+`G` keeps group keys, aggregate values and member rows distinct. A field
+holding a list of plain values groups like `field[]`: each element is its own
+group, so a host with two siteadmins counts under both. Lists of objects still
+need a leaf field. Row operations
 such as `P`, `U`, `VALUE`, quick search and clean run within each partition.
 `F` tests matching header/aggregate fields first; otherwise it filters members
 and removes empty groups. `S` and `L` order/limit groups. `A` adds one aggregate

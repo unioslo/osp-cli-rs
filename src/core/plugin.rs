@@ -596,6 +596,14 @@ pub struct ResponseMetaV1 {
     /// Replace the previous progress block when stderr is a terminal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub progress_replace: bool,
+    /// Human-only cap on rows shown when no DSL stage runs. JSON output and
+    /// pipeline stages always see every row the producer returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_limit: Option<usize>,
+    /// Set when the rows are one page of a larger result: how to fetch the
+    /// rest. Pipeline stages then warn that counts and groups cover this page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_rows: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {

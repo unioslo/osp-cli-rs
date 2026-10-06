@@ -70,6 +70,7 @@ pub(crate) fn plugin_data_to_output_result(
                 .map(|meta| meta.progress_append.clone())
                 .unwrap_or_default(),
             progress_replace: meta.is_some_and(|meta| meta.progress_replace),
+            display_limit: meta.and_then(|meta| meta.display_limit),
         },
     }
 }
@@ -112,6 +113,8 @@ mod tests {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             }),
         );
 
@@ -148,6 +151,8 @@ mod tests {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             }),
         );
 
@@ -429,6 +434,7 @@ mod tests {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
             },
         };
 

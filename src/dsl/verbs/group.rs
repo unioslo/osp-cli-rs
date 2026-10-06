@@ -3,6 +3,8 @@
 //! Grouping works on dimensions rather than structures:
 //! - grouping by scalar keys is allowed
 //! - grouping by selectors/fan-out paths is allowed
+//! - grouping by a list of scalars fans out like `field[]`: one group per
+//!   element, so a row with two values joins two groups
 //! - grouping by plain objects or arrays of objects should fail and push the
 //!   user toward a leaf field or `?field`
 
@@ -197,6 +199,12 @@ fn resolve_group_pairs(row: &Row, key_plan: &GroupKeyPlan) -> Result<Vec<(String
         keys.push(flat_hint.clone());
     }
 
+    if is_scalar_list(row, key_plan, &keys) {
+        return Ok(keys
+            .into_iter()
+            .filter_map(|key| row.get(&key).cloned().map(|value| (key, value)))
+            .collect());
+    }
     reject_structured_container_token(row, key_plan, &keys)?;
 
     // Existence reduces all matching leaves to one boolean dimension.
@@ -239,6 +247,24 @@ fn reject_structured_container_token(
     }
 
     Ok(())
+}
+
+/// Whether a bare field names a list whose elements are all scalars, i.e.
+/// every matched key is a direct `field[N]` leaf.
+fn is_scalar_list(row: &Row, key_plan: &GroupKeyPlan, keys: &[String]) -> bool {
+    let Some(flat_hint) = &key_plan.flat_hint else {
+        return false;
+    };
+    !key_plan.key_spec.existence
+        && !key_plan.allow_multiple
+        && !keys.is_empty()
+        && !row.contains_key(flat_hint)
+        && keys.iter().all(|key| {
+            key.strip_prefix(flat_hint.as_str())
+                .and_then(|rest| rest.strip_prefix('['))
+                .and_then(|rest| rest.strip_suffix(']'))
+                .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+        })
 }
 
 fn is_descendant_key(key: &str, prefix: &str) -> bool {

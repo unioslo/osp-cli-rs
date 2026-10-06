@@ -198,6 +198,8 @@ impl NativeCommand for TestNativeCommand {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             },
         })))
     }

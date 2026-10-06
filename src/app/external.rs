@@ -685,10 +685,12 @@ fn add_native_pagination_hint(result: &mut CliCommandResult, context: &NativeSes
     };
     let text = match (pagination.previous.is_some(), pagination.next.is_some()) {
         (true, true) => {
-            "More results are available. Type `next` for the next page or `prev` for the previous page."
+            "More results are available. Type `next` or press Shift+→ for the next page, `prev` or Shift+← for the previous."
         }
-        (false, true) => "More results are available. Type `next` for the next page.",
-        (true, false) => "Type `prev` for the previous page.",
+        (false, true) => {
+            "More results are available. Type `next` or press Shift+→ for the next page."
+        }
+        (true, false) => "Type `prev` or press Shift+← for the previous page.",
         (false, false) => return,
     };
     result.messages.success(text);
@@ -951,6 +953,8 @@ mod tests {
                             presentation_lines: Vec::new(),
                             progress_append: Vec::new(),
                             progress_replace: false,
+                            display_limit: None,
+                            partial_rows: None,
                         },
                     }))
                 }
@@ -1063,6 +1067,8 @@ mod tests {
                     presentation_lines: Vec::new(),
                     progress_append: Vec::new(),
                     progress_replace: false,
+                    display_limit: None,
+                    partial_rows: None,
                 },
             })))
         }
@@ -1290,6 +1296,8 @@ JSON
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             },
         };
 
@@ -1312,7 +1320,7 @@ JSON
         add_native_pagination_hint(&mut result, &context);
         assert_eq!(
             result.messages.entries()[0].text,
-            "More results are available. Type `next` for the next page."
+            "More results are available. Type `next` or press Shift+→ for the next page."
         );
 
         let mut result = CliCommandResult::exit(0);

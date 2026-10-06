@@ -80,8 +80,121 @@ pub fn apply_pipeline(rows: Vec<Row>, stages: &[String]) -> Result<OutputResult>
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn apply_output_pipeline(output: OutputResult, stages: &[String]) -> Result<OutputResult> {
-    let compiled = CompiledPipeline::from_parsed(parse_stage_list(stages)?)?;
-    run_compiled(output, &compiled)
+    let mut output = output;
+    for stage in stages {
+        let stages = resolve_stage_keys(&output, std::slice::from_ref(stage))?;
+        let compiled = CompiledPipeline::from_parsed(parse_stage_list(&stages)?)?;
+        output = run_compiled(output, &compiled)?;
+    }
+    Ok(output)
+}
+
+/// Lets keys be what a person reads in the table: a column label resolves to
+/// its field, and a key no row has is an error naming the columns instead of
+/// an empty or single-group result. Only plain keys of `F`, `S`, `G` and `P`
+/// are checked; values, directions and aliases pass through unchanged.
+fn resolve_stage_keys(output: &OutputResult, stages: &[String]) -> Result<Vec<String>> {
+    let rows = crate::core::output_model::output_items_to_rows(&output.items);
+    if rows.is_empty() {
+        return Ok(stages.to_vec());
+    }
+    let labels = match (
+        &output.meta.display_columns,
+        &output.meta.display_column_labels,
+    ) {
+        (Some(columns), Some(labels)) => labels
+            .iter()
+            .zip(columns)
+            .map(|(label, column)| (label.to_ascii_lowercase(), column.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        _ => std::collections::BTreeMap::new(),
+    };
+    let resolve = |key: &str| -> Result<String> {
+        let bare = key.trim_start_matches(['!', '?', '=', '-', '+']);
+        let prefix = &key[..key.len() - bare.len()];
+        let spec = crate::dsl::parse::key_spec::KeySpec::parse(bare);
+        if rows.iter().any(|row| {
+            !crate::dsl::eval::resolve::resolve_values(row, &spec.token, spec.exact).is_empty()
+        }) {
+            return Ok(key.to_string());
+        }
+        if let Some(field) = labels.get(&bare.to_ascii_lowercase()) {
+            return Ok(format!("{prefix}{field}"));
+        }
+        let columns = rows
+            .iter()
+            .flat_map(|row| row.keys().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("no field '{bare}' in these rows; columns: {columns}")
+    };
+    stages
+        .iter()
+        .map(|stage| {
+            use crate::dsl::parse::lexer::{Span, StageSegment, TokenKind, tokenize_stage};
+            let tokens = tokenize_stage(&StageSegment {
+                raw: stage.clone(),
+                span: Span {
+                    start: 0,
+                    end: stage.len(),
+                },
+            })?;
+            let Some(verb) = tokens.first() else {
+                return Ok(stage.clone());
+            };
+            let verb = verb.text.to_ascii_uppercase();
+            if !matches!(verb.as_str(), "F" | "S" | "G" | "P") {
+                return Ok(stage.clone());
+            }
+            let mut replacements = Vec::new();
+            let mut after_as = false;
+            for token in tokens
+                .iter()
+                .skip(1)
+                .filter(|token| token.kind == TokenKind::Word)
+            {
+                if after_as {
+                    after_as = false;
+                    continue;
+                }
+                if matches!(verb.as_str(), "G" | "S") && token.text.eq_ignore_ascii_case("as") {
+                    after_as = true;
+                    continue;
+                }
+                if verb == "S" && matches!(token.text.to_ascii_lowercase().as_str(), "asc" | "desc")
+                {
+                    continue;
+                }
+                let resolved = token
+                    .text
+                    .split(',')
+                    .map(|key| {
+                        if key.is_empty() {
+                            Ok(String::new())
+                        } else {
+                            resolve(key)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .join(",");
+                if resolved != token.text {
+                    replacements.push((token.span, serde_json::to_string(&resolved)?));
+                }
+                if verb == "F" {
+                    break;
+                }
+            }
+            // Rewrite only key spans: quoted values and their whitespace belong to
+            // the DSL lexer and must survive byte-for-byte.
+            let mut resolved = stage.clone();
+            for (span, replacement) in replacements.into_iter().rev() {
+                resolved.replace_range(span.start..span.end, &replacement);
+            }
+            Ok(resolved)
+        })
+        .collect()
 }
 
 /// Execute a pipeline starting from plain rows.
@@ -150,14 +263,16 @@ pub(crate) fn run_compiled(
         // Once a real stage runs, only the transformed rows may be shown.
         output.meta.presentation_lines.clear();
         output.meta.progress_append.clear();
+        output.meta.display_limit = None;
         output.meta.wants_copy |= matches!(stage, CompiledStage::Copy);
         if !stage.behavior().preserves_render_recommendation {
+            // Shape changes derive columns from the result. Field-keyed
+            // formatting (relative times, timestamps) still applies to any
+            // field that survives, so it stays.
             output.meta.render_recommendation = None;
             output.meta.display_columns = None;
             output.meta.display_column_labels = None;
             output.meta.column_align.clear();
-            output.meta.unix_timestamp_columns.clear();
-            output.meta.display_rules.clear();
         }
         preserve_guide &= matches!(
             stage.behavior().semantic_effect,

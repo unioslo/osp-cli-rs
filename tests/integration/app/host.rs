@@ -128,6 +128,8 @@ impl NativeCommand for NativeProbeCommand {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             },
         })))
     }
@@ -260,6 +262,8 @@ impl NativeCommand for CuratedOrchRowsCommand {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             },
         })))
     }
@@ -296,6 +300,8 @@ impl NativeCommand for SiteStatusCommand {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
+                partial_rows: None,
             },
         })))
     }

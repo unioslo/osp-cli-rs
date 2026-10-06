@@ -105,8 +105,14 @@ impl PreparedPluginOutput {
             parse_output_format_hint(meta.format_hint.as_deref()),
         )
         .wrap_err("failed to prepare plugin response output")?;
+        let mut messages = plugin_response_messages(messages);
+        if let Some(rest) = meta.partial_rows.as_deref().filter(|_| !stages.is_empty()) {
+            messages.warning(format!(
+                "Pipe stages ran over this page only, so counts and groups are partial; {rest}"
+            ));
+        }
         Ok(Self {
-            messages: plugin_response_messages(messages),
+            messages,
             output,
             format_hint,
         })
@@ -414,13 +420,12 @@ pub(crate) fn run_progress_command_with_ui(
         output,
         format_hint,
     } = result;
-    if progress_output_is_empty(&output) {
-        return Ok(());
-    }
-
     let runtime = CommandRenderRuntime::new(config, ui);
     if !messages.is_empty() {
         emit_messages_with_runtime(&runtime, &messages, ui.message_verbosity, sink);
+    }
+    if progress_output_is_empty(&output) {
+        return Ok(());
     }
 
     let json_output = resolve_render_settings_with_hint(&ui.render_settings, format_hint).format
@@ -461,7 +466,9 @@ fn progress_output_is_empty(output: &OutputResult) -> bool {
         OutputItems::Rows(rows) => {
             rows.is_empty()
                 || rows.iter().all(|row| {
-                    row.len() == 1 && row.get("value").is_some_and(serde_json::Value::is_null)
+                    row.is_empty()
+                        || (row.len() == 1
+                            && row.get("value").is_some_and(serde_json::Value::is_null))
                 })
         }
         OutputItems::Groups(groups) => groups.is_empty(),
@@ -652,6 +659,7 @@ pub(crate) fn apply_output_stages(
         output.meta.presentation_lines.clear();
         output.meta.progress_append.clear();
         output.meta.progress_replace = false;
+        output.meta.display_limit = None;
         // Once a DSL pipeline runs, producer-side format hints stop being an
         // out-of-band override. Any surviving recommendation now lives on the
         // transformed output metadata itself.

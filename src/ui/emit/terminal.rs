@@ -326,6 +326,26 @@ fn emit_table(block: &TableBlock, settings: &ResolvedRenderSettings) -> String {
             line.truncate(line.trim_end().len());
         }
     }
+    // Never drop columns silently: name them and how to see them.
+    if widths.len() < table.headers.len() {
+        let hidden = table.headers[widths.len()..]
+            .iter()
+            .map(|cell| cell.raw.as_str())
+            .collect::<Vec<_>>();
+        let room = settings
+            .width
+            .map_or(usize::MAX, |width| width.saturating_sub(settings.margin));
+        let mut footer = format!("+{} hidden: {}", hidden.len(), hidden.join(", "));
+        let hint = " (| P to pick, or --json)";
+        if UnicodeWidthStr::width(footer.as_str()) + UnicodeWidthStr::width(hint) <= room {
+            footer.push_str(hint);
+        }
+        while UnicodeWidthStr::width(footer.as_str()) > room && footer.pop().is_some() {}
+        lines.push(indent_lines(
+            &styler.paint(&footer, StyleToken::Muted),
+            settings.margin,
+        ));
+    }
     lines.join("\n")
 }
 
@@ -372,6 +392,11 @@ fn fitted_table_widths(
                 }
             }
         }
+    }
+    // The first column names the row; cutting it would make rows unusable,
+    // so it keeps its whole width and later columns give way instead.
+    if let (Some(first), Some(natural_first)) = (minimum.first_mut(), natural.first()) {
+        *first = (*first).max(*natural_first);
     }
     // Column order expresses product priority. Drop secondary columns when
     // headings or useful tokens cannot fit; prose can use the remaining room.

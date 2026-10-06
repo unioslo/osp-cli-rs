@@ -10,9 +10,7 @@
 //! module derive the richer [`ResolvedRenderSettings`] view consumed by the
 //! rest of the UI pipeline.
 
-use crate::config::{
-    ConfigSource, ConfigValue, DEFAULT_UI_WIDTH, DEFAULT_UI_WIDTH_MAX, ResolvedConfig, Scope,
-};
+use crate::config::{ConfigSource, ConfigValue, DEFAULT_UI_WIDTH_MAX, ResolvedConfig, Scope};
 use crate::core::output::{ColorMode, OutputFormat, RenderMode, UnicodeMode};
 use crate::core::output_model::{
     OutputItems, OutputResult, RenderRecommendation, output_items_to_rows,
@@ -758,7 +756,9 @@ impl RenderSettings {
             (Some(configured), Some(measured)) => configured.min(measured),
             (Some(configured), None) => configured,
             (None, Some(measured)) => measured,
-            (None, None) => DEFAULT_UI_WIDTH as usize,
+            // Nothing measured (piped or redirected output): natural width, so
+            // `| head` and files keep whole values instead of a 72-column fit.
+            (None, None) => return None,
         };
 
         Some(if self.width_max == 0 {
@@ -1192,6 +1192,7 @@ mod tests {
                 presentation_lines: Vec::new(),
                 progress_append: Vec::new(),
                 progress_replace: false,
+                display_limit: None,
             },
         };
         assert_eq!(

@@ -166,6 +166,16 @@ fn render_output_with_profile(
     settings: &RenderSettings,
     profile: RenderProfile,
 ) -> String {
+    let mut unlimited;
+    let output = if output.meta.display_limit.is_some()
+        && (!settings.runtime.stdout_is_tty || profile == RenderProfile::CopySafe)
+    {
+        unlimited = output.clone();
+        unlimited.meta.display_limit = None;
+        &unlimited
+    } else {
+        output
+    };
     let plan = plan_output(output, settings, profile);
     emit::emit_doc(
         &lower::lower_output(output, &plan),

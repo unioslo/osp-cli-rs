@@ -1104,6 +1104,8 @@ fn prepare_plugin_response_handles_failures_and_pipeline_hints_unit() {
             presentation_lines: Vec::new(),
             progress_append: Vec::new(),
             progress_replace: false,
+            display_limit: None,
+            partial_rows: None,
         },
     };
     let prepared = super::command_output::prepare_plugin_response(response, &["P uid".to_string()])
