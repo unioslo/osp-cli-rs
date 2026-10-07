@@ -287,7 +287,7 @@ impl Default for RenderSettings {
             theme_name: DEFAULT_THEME_NAME.to_string(),
             theme: None,
             width: None,
-            width_max: DEFAULT_UI_WIDTH_MAX as usize,
+            width_max: usize::try_from(DEFAULT_UI_WIDTH_MAX).unwrap_or(0),
             margin: 0,
             indent_size: 2,
             medium_list_max: 5,
@@ -450,8 +450,8 @@ pub(crate) fn apply_render_config_overrides(
         settings.width = config_usize_override(config, "ui.width").filter(|width| *width > 0);
     }
 
-    if let Some(width_max) = config_usize_override(config, "ui.width-max") {
-        settings.width_max = width_max;
+    if let Some(width_max) = config_int(config, "ui.width-max") {
+        settings.width_max = usize::try_from(width_max).unwrap_or(0);
     }
 
     sync_render_config_overrides(settings, config);
@@ -750,6 +750,9 @@ impl RenderSettings {
     }
 
     fn resolve_width(&self) -> Option<usize> {
+        if self.width_max == 0 {
+            return self.width.filter(|width| *width > 0);
+        }
         let configured = self.width.filter(|width| *width > 0);
         let measured = self.runtime.width.filter(|width| *width > 0);
         let width = match (configured, measured) {

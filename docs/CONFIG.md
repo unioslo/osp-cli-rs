@@ -347,12 +347,12 @@ These keys currently drive user-visible rendering and REPL presentation:
 - `ui.color.mode`
 - `ui.unicode.mode`
 - `ui.width`
-  - Optional upper width preference; the actual narrower terminal wins, and
-    the 72-column hint is used when no terminal width is available.
+  - Optional explicit render width; with a positive `ui.width-max`, the
+    actual narrower terminal also limits output.
 - `ui.width-max`
-  - Maximum rendered terminal width; defaults to `120`, and `0` disables the
-    maximum. A measured terminal narrower than the configured limit is always
-    respected.
+  - Maximum rendered width; defaults to `-1` (natural content width).
+    A positive limit fits output to that limit or the narrower terminal.
+    `0` also disables the maximum. An explicit `ui.width` still applies.
 - `ui.chrome.frame`
   - `none | top | bottom | top-bottom | square | round`
 - `ui.chrome.rule_policy`

@@ -80,13 +80,11 @@ Useful persistent config keys:
 - `ui.width`
 - `ui.width-max`
 
-The measured terminal width is used when it is available. `ui.width` is an
-optional upper preference and falls back to 72 columns when no measurement is
-available; a narrower terminal always wins. `ui.width-max` caps the result at
-120 columns by default. Raise it to use more of a wide terminal, or set it to
-`0` to disable the cap. These settings mainly matter for tables, MREG-style
-layouts, and guide/help rendering where line wrapping and column packing
-change visibly.
+`ui.width-max` defaults to `-1`: output grows to its content, including tables
+wider than the physical terminal. Set a positive maximum to fit output to that
+limit or the narrower measured terminal. `0` also disables the maximum.
+An explicit `ui.width` remains an upper width preference. Piped output keeps
+natural width unless an explicit width was supplied.
 
 ## Tables and MREG Layout
 

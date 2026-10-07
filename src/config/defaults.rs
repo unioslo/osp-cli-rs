@@ -35,7 +35,7 @@ pub const DEFAULT_LOG_FILE_LEVEL: &str = "warn";
 /// Default render width hint.
 pub const DEFAULT_UI_WIDTH: i64 = 72;
 /// Default maximum terminal width used for rendered output.
-pub const DEFAULT_UI_WIDTH_MAX: i64 = 120;
+pub const DEFAULT_UI_WIDTH_MAX: i64 = -1;
 /// Default left margin for rendered output.
 pub const DEFAULT_UI_MARGIN: i64 = 0;
 /// Default indentation width for nested output.

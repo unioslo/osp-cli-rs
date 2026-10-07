@@ -675,8 +675,8 @@ fn insert_ui_schema_keys(schema: &mut ConfigSchema) {
     insert_builtin_schema_key(
         schema,
         "ui.width-max",
-        SchemaEntry::non_negative_integer(),
-        "Maximum render width; zero disables the maximum",
+        SchemaEntry::integer(),
+        "Maximum render width; -1 disables the maximum",
     );
     insert_builtin_schema_key(
         schema,
