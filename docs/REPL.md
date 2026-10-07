@@ -287,3 +287,11 @@ In those cases, use ordinary CLI commands with explicit render flags such as:
 ```bash
 osp --format json --render-mode plain plugins list
 ```
+
+## Background notices
+
+Products can use `osp_cli::repl::post_notice` for a short informational line
+computed after startup. The editor prints it above the prompt; work posted
+before the editor starts is queued. The basic reader also displays notices on
+stderr, although it cannot redraw a partially typed line. Notice delivery does
+not wait for network work or block the prompt.

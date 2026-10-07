@@ -18,8 +18,8 @@ use crate::repl::menu::SharedCompletionMenu;
 use anyhow::Result;
 use nu_ansi_term::{Color, Style};
 use reedline::{
-    EditCommand, Emacs, KeyCode, KeyModifiers, Reedline, ReedlineEvent, ReedlineMenu, Signal,
-    default_emacs_keybindings,
+    EditCommand, Emacs, ExternalPrinter, KeyCode, KeyModifiers, Reedline, ReedlineEvent,
+    ReedlineMenu, Signal, default_emacs_keybindings,
 };
 use std::io::{self, Write};
 
@@ -141,7 +141,11 @@ pub(super) fn build_interactive_editor(
     if let Some(highlighter) = highlighter {
         editor = editor.with_highlighter(Box::new(highlighter));
     }
-    editor.with_history(Box::new(history_store))
+    let printer = ExternalPrinter::default();
+    crate::repl::notices::attach(&printer);
+    editor
+        .with_external_printer(printer)
+        .with_history(Box::new(history_store))
 }
 
 pub(super) fn drive_interactive_editor<F, R, B>(
@@ -186,6 +190,7 @@ pub(crate) fn run_repl_basic<F>(
 where
     F: FnMut(&str, &SharedHistory) -> Result<ReplLineResult>,
 {
+    crate::repl::notices::attach_basic();
     loop {
         print!("{}{}", prompt.left(), prompt.indicator());
         io::stdout().flush()?;

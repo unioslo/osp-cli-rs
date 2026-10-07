@@ -178,12 +178,24 @@ impl SuggestionEngine {
                     .into_iter()
                     .map(SuggestionOutput::Item),
             );
+        }
+        // A command may take a subcommand or a value in the same slot, as
+        // `nh rhel9` beside `nh host`. Values join once a word is typed, so an
+        // empty slot still lists the subcommands first; a subcommand wins ties.
+        // The root's positional is the synthetic command list, already covered.
+        let values = if request.show_subcommands
+            && (request.stub.is_empty() || std::ptr::eq(request.context_node, &self.tree.root))
+        {
+            Vec::new()
         } else {
-            out.extend(self.arg_value_suggestions(
-                request.context_node,
-                request.arg_index,
-                request.stub,
-            ));
+            self.arg_value_suggestions(request.context_node, request.arg_index, request.stub)
+        };
+        for value in values {
+            let duplicate = matches!(&value, SuggestionOutput::Item(new)
+                if out.iter().any(|seen| matches!(seen, SuggestionOutput::Item(old) if old.text == new.text)));
+            if !duplicate {
+                out.push(value);
+            }
         }
 
         if request.show_flag_names {

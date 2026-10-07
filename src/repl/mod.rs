@@ -109,6 +109,7 @@ pub(crate) mod input;
 pub(crate) mod lifecycle;
 mod menu;
 mod menu_core;
+mod notices;
 pub(crate) mod presentation;
 pub(crate) mod surface;
 
@@ -123,6 +124,7 @@ pub use engine::{
     ReplLineResult, ReplPrompt, ReplReloadKind, ReplRunConfig, ReplRunConfigBuilder, ReplRunResult,
     ReplTabMode, SharedHistory, color_from_style_spec, default_pipe_verbs, run_repl,
 };
+pub use notices::post_notice;
 // Debug surfaces for REPL completion, highlight, and history inspection.
 pub use engine::{
     CompletionDebug, CompletionDebugFrame, CompletionDebugMatch, CompletionDebugOptions, DebugStep,
