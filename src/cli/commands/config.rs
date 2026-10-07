@@ -195,7 +195,8 @@ fn run_alias_add(
         context,
         ConfigSetArgs {
             key,
-            value: Some(args.template),
+            value: vec![args.template],
+            display_user: None,
             from_file: None,
             scope: args.scope,
             store: args.store,
@@ -507,12 +508,30 @@ fn run_config_set(
     context: ConfigCommandContext<'_>,
     args: ConfigSetArgs,
 ) -> Result<CliCommandResult> {
-    let key = args.key.trim().to_ascii_lowercase();
+    let requested_key = args.key.trim().to_ascii_lowercase();
+    let key = if requested_key == "user.display_name" {
+        let user = args
+            .display_user
+            .as_deref()
+            .or_else(|| context.context.authenticated_subject())
+            .or_else(|| context.config.get_string("user.name"))
+            .filter(|user| !user.trim().is_empty())
+            .ok_or_else(|| miette!("select a user with -u or --user"))?;
+        if user.contains('.') {
+            return Err(miette!("display-name usernames cannot contain a dot"));
+        }
+        format!("user.display_names.{user}")
+    } else {
+        if args.display_user.is_some() {
+            return Err(miette!("--user selects the account for user.display_name"));
+        }
+        requested_key
+    };
     let schema = ConfigSchema::default();
     schema.validate_writable_key(&key).into_diagnostic()?;
-    let input = match (&args.value, &args.from_file) {
-        (Some(value), None) => value.clone(),
-        (None, Some(path)) => {
+    let input = match (args.value.as_slice(), &args.from_file) {
+        (values, None) if !values.is_empty() => values.join(" "),
+        ([], Some(path)) => {
             let content = if path == std::path::Path::new("-") {
                 use std::io::Read;
                 let mut content = String::new();

@@ -211,7 +211,8 @@ fn repl_dsl_capability_is_declared_per_command_unit() {
     let config_set = Commands::Config(crate::cli::ConfigArgs {
         command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
             key: "ui.mode".to_string(),
-            value: Some("plain".to_string()),
+            value: vec!["plain".to_string()],
+            display_user: None,
             from_file: None,
             scope: crate::cli::ConfigScopeArgs::default(),
             store: crate::cli::ConfigStoreArgs::default(),
@@ -243,7 +244,8 @@ fn external_inline_builtin_reuses_repl_dsl_policy_unit() {
     let command = Commands::Config(crate::cli::ConfigArgs {
         command: ConfigCommands::Set(crate::cli::ConfigSetArgs {
             key: "ui.mode".to_string(),
-            value: Some("plain".to_string()),
+            value: vec!["plain".to_string()],
+            display_user: None,
             from_file: None,
             scope: crate::cli::ConfigScopeArgs::default(),
             store: crate::cli::ConfigStoreArgs::default(),

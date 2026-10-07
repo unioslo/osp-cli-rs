@@ -115,7 +115,8 @@ fn write_target(scope: ConfigScopeTarget) -> ConfigWriteTarget {
 fn config_set_args(key: &str, value: &str) -> ConfigSetArgs {
     ConfigSetArgs {
         key: key.to_string(),
-        value: Some(value.to_string()),
+        value: vec![value.to_string()],
+        display_user: None,
         from_file: None,
         scope: ConfigScopeArgs::default(),
         store: ConfigStoreArgs::default(),

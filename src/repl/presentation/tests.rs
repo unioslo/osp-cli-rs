@@ -529,7 +529,8 @@ fn repl_intro_template_placeholder_rules_unit() {
             "repl.intro_template.compact",
             "Hello {{display_name}} {{profile}} {{version}} {{missing}}",
         ),
-        ("user.display_name", "Oistes"),
+        ("user.name", "oistes"),
+        ("user.display_names.oistes", "Oistes"),
     ]);
     let expanded_rendered = render_repl_intro(repl_view(&expanded), &intro_surface(&["help"]));
     assert!(expanded_rendered.contains("Hello Oistes default"));
@@ -854,7 +855,8 @@ fn intro_template_expansion_handles_scalars_sensitive_keys_and_malformed_placeho
     session.set("extensions.demo.enabled", true);
     session.set("extensions.demo.count", 42_i64);
     session.set("extensions.demo.token", "secret");
-    session.set("user.display_name", "Codex");
+    session.set("user.name", "codex");
+    session.set("user.display_names.codex", "Codex");
     session.set(
         "extensions.demo.items",
         vec!["1".to_string(), "2".to_string(), "3".to_string()],

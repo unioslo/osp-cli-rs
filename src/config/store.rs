@@ -49,6 +49,11 @@ impl TomlStoreEditOptions {
         }
     }
 
+    /// Fill a missing or blank string without replacing a value set concurrently.
+    pub const fn fill_empty() -> Self {
+        Self::new().with_mode(TomlStoreEditMode::FillEmpty)
+    }
+
     /// Replaces the edit mode.
     pub const fn with_mode(mut self, mode: TomlStoreEditMode) -> Self {
         self.mode = mode;
@@ -72,7 +77,7 @@ impl TomlStoreEditOptions {
     }
 
     pub(crate) const fn should_write(self) -> bool {
-        matches!(self.mode, TomlStoreEditMode::Persist)
+        !matches!(self.mode, TomlStoreEditMode::DryRun)
     }
 
     pub(crate) const fn strict_secret_permissions(self) -> bool {
@@ -87,6 +92,8 @@ pub enum TomlStoreEditMode {
     /// Validate and persist the edit to disk.
     #[default]
     Persist,
+    /// Persist only when the key is missing or contains a blank string.
+    FillEmpty,
     /// Validate and compute the edit result without writing the file.
     DryRun,
 }
@@ -223,7 +230,12 @@ fn edit_scoped_value_in_toml(
     let previous = match operation {
         ValidatedTomlEditOperation::Set(value) => {
             let scoped_table = scoped_table_mut(root_table, &normalized_scope)?;
-            set_dotted_value(scoped_table, key, &value)?
+            set_dotted_value(
+                scoped_table,
+                key,
+                &value,
+                matches!(options.mode, TomlStoreEditMode::FillEmpty),
+            )?
         }
         ValidatedTomlEditOperation::Unset => {
             unset_dotted_value(root_table, &normalized_scope, key)?
@@ -558,6 +570,7 @@ fn set_dotted_value(
     table: &mut toml::value::Table,
     dotted_key: &str,
     value: &ConfigValue,
+    only_if_empty: bool,
 ) -> Result<Option<ConfigValue>, ConfigError> {
     let parts = dotted_key
         .split('.')
@@ -578,6 +591,12 @@ fn set_dotted_value(
     }
 
     let leaf = parts[parts.len() - 1];
+    if only_if_empty
+        && let Some(existing) = cursor.get(leaf)
+        && !matches!(existing, toml::Value::String(text) if text.trim().is_empty())
+    {
+        return ConfigValue::from_toml(dotted_key, existing).map(Some);
+    }
     let previous = cursor
         .insert(leaf.to_string(), config_value_to_toml(value))
         .and_then(|existing| ConfigValue::from_toml(dotted_key, &existing).ok());

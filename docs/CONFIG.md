@@ -47,6 +47,24 @@ Useful switches:
 - `--permanent`
   - persist the change when running inside the REPL
 
+## Display names
+
+Set the current user's greeting name; quotes are optional:
+
+```bash
+osp config set user.display_name Øistein Søvik
+osp config set user.display_name Øistein Søvik --user oistes-drift
+```
+
+The setter's `-u` / `--user` option selects another account without changing
+the session user. Otherwise the current user (including root `osp -u USER`)
+is used. All value words are joined with spaces; there is no positional
+username after the name. Values are stored separately under
+`user.display_names.<username>`; `{{display_name}}` uses the selected user's
+entry and falls back to the username. Usernames containing dots are unsupported
+in this table. Old stored `user.display_name` and `user.full_name` keys must be
+replaced with the per-user key.
+
 ## Profile Selection On The Command Line
 
 Select a configured profile explicitly:

@@ -538,6 +538,7 @@ pub struct ConfigSchema {
 enum DynamicSchemaKeyKind {
     PluginCommandState,
     PluginCommandProvider,
+    UserDisplayName,
 }
 
 impl Default for ConfigSchema {
@@ -613,18 +614,6 @@ fn insert_identity_schema_keys(schema: &mut ConfigSchema) {
         "user.name",
         SchemaEntry::string(),
         "Short user name used in prompts and interpolation",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "user.display_name",
-        SchemaEntry::string(),
-        "Preferred display name for the current user",
-    );
-    insert_builtin_schema_key(
-        schema,
-        "user.full_name",
-        SchemaEntry::string(),
-        "Full name for the current user",
     );
     insert_builtin_schema_key(
         schema,
@@ -2344,7 +2333,9 @@ fn adapt_dynamic_value_for_schema(
     kind: DynamicSchemaKeyKind,
 ) -> Result<ConfigValue, ConfigError> {
     let adapted = match kind {
-        DynamicSchemaKeyKind::PluginCommandState | DynamicSchemaKeyKind::PluginCommandProvider => {
+        DynamicSchemaKeyKind::PluginCommandState
+        | DynamicSchemaKeyKind::PluginCommandProvider
+        | DynamicSchemaKeyKind::UserDisplayName => {
             adapt_value_for_schema(key, value, &SchemaEntry::string())?
         }
     };
@@ -2379,6 +2370,11 @@ fn validate_allowed_values(
 
 fn dynamic_schema_key_kind(key: &str) -> Option<DynamicSchemaKeyKind> {
     let normalized = key.trim().to_ascii_lowercase();
+    // `user.display_names.<user>`: the name shown for one `-u` user.
+    if let Some(user) = normalized.strip_prefix("user.display_names.") {
+        return (!user.trim().is_empty() && !user.contains('.'))
+            .then_some(DynamicSchemaKeyKind::UserDisplayName);
+    }
     let remainder = normalized.strip_prefix("plugins.")?;
     let (command, field) = remainder.rsplit_once('.')?;
     if command.trim().is_empty() {

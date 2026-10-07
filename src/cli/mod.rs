@@ -730,9 +730,13 @@ pub struct ConfigExplainArgs {
 pub struct ConfigSetArgs {
     /// Config key to write.
     pub key: String,
-    /// Config value to write; conflicts with --from-file.
-    #[arg(required_unless_present = "from_file", conflicts_with = "from_file")]
-    pub value: Option<String>,
+    /// Config value to write. Multiple words are joined with spaces.
+    #[arg(num_args = 1.., required_unless_present = "from_file", conflicts_with = "from_file")]
+    pub value: Vec<String>,
+
+    /// Account whose display name to set; defaults to the current user.
+    #[arg(short = 'u', long = "user", value_name = "USERNAME")]
+    pub display_user: Option<String>,
 
     /// Read the value once from a UTF-8 file, or - for stdin. Strip trailing newlines only.
     #[arg(long, value_name = "PATH", conflicts_with = "value")]

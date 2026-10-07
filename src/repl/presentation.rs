@@ -440,23 +440,12 @@ fn resolve_intro_placeholder(
             return effective_user().to_string();
         }
         "display_name" => {
+            let user = effective_user();
             return view
                 .config
-                .get_string("user.display_name")
-                .or_else(|| view.config.get_string("user.full_name"))
-                .or_else(|| view.context.authenticated_subject())
-                .or_else(|| view.config.get_string("user.name"))
-                .unwrap_or("anonymous")
-                .to_string();
-        }
-        "user.display_name" | "user.full_name" => {
-            return view
-                .config
-                .get_string("user.display_name")
-                .or_else(|| view.config.get_string("user.full_name"))
-                .or_else(|| view.context.authenticated_subject())
-                .or_else(|| view.config.get_string("user.name"))
-                .unwrap_or("anonymous")
+                .get_string(&format!("user.display_names.{user}"))
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or(user)
                 .to_string();
         }
         "session.user_label" => {
