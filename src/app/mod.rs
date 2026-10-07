@@ -131,6 +131,7 @@ pub(crate) struct AppDefinition {
     native_commands: NativeCommandRegistry,
     product_defaults: ConfigLayer,
     product_help_options: Vec<(String, String)>,
+    config_flags: Vec<(&'static str, &'static str, &'static str, &'static str)>,
     policy_context: CommandPolicyContext,
     builtin_policy: CommandPolicyRegistry,
     access_recovery: Option<Arc<dyn CommandAccessRecovery>>,
@@ -273,6 +274,19 @@ impl App {
         help: impl Into<String>,
     ) -> Self {
         self.definition = self.definition.with_product_help_option(syntax, help);
+        self
+    }
+
+    /// Registers a root flag that sets one invocation-only config value.
+    /// Flags targeting the same key are mutually exclusive.
+    pub fn with_config_flag(
+        mut self,
+        name: &'static str,
+        help: &'static str,
+        key: &'static str,
+        value: &'static str,
+    ) -> Self {
+        self.definition.config_flags.push((name, help, key, value));
         self
     }
 
@@ -601,6 +615,19 @@ impl AppBuilder {
         help: impl Into<String>,
     ) -> Self {
         self.definition = self.definition.with_product_help_option(syntax, help);
+        self
+    }
+
+    /// Registers a root flag that sets one invocation-only config value.
+    /// Flags targeting the same key are mutually exclusive.
+    pub fn with_config_flag(
+        mut self,
+        name: &'static str,
+        help: &'static str,
+        key: &'static str,
+        value: &'static str,
+    ) -> Self {
+        self.definition.config_flags.push((name, help, key, value));
         self
     }
 

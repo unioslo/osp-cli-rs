@@ -90,6 +90,8 @@ impl From<PresentationArg> for UiPresentation {
     after_help = "Run `osp COMMAND --help` for a command family, or `osp` alone for the interactive shell. Pipe output through the OSP DSL with `|`; use `| H` for in-band DSL help."
 )]
 pub struct Cli {
+    #[arg(skip)]
+    pub(crate) product_overrides: ConfigLayer,
     /// Override the effective user name for this invocation.
     #[arg(short = 'u', long = "user")]
     pub user: Option<String>,
@@ -784,6 +786,7 @@ pub struct ConfigUnsetArgs {
 
 impl Cli {
     pub(crate) fn append_static_session_overrides(&self, layer: &mut ConfigLayer) {
+        layer.extend_from_layer(&self.product_overrides);
         if let Some(user) = self
             .user
             .as_deref()

@@ -9,7 +9,7 @@ use crate::config::ResolvedConfig;
 use crate::core::output::OutputFormat;
 use crate::native::{NativeCommandCatalogEntry, NativeCommandRegistry};
 use crate::repl;
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use miette::{Result, WrapErr, miette};
 use nu_ansi_term::Style;
 
@@ -269,7 +269,33 @@ where
     stage_tokens.extend(suffix.iter().cloned());
     let stages = crate::cli::pipeline::split_command_tokens(&stage_tokens).stages;
     crate::cli::validate_cli_dsl_stages(&stages)?;
-    match Cli::try_parse_from(scanned.argv.iter().cloned()) {
+    let mut command = Cli::command();
+    for &(name, help, key, _) in &app.config_flags {
+        let conflicts = app
+            .config_flags
+            .iter()
+            .filter(|&&(other, _, other_key, _)| other != name && other_key == key)
+            .map(|&(other, _, _, _)| other);
+        command = command.arg(
+            clap::Arg::new(name)
+                .long(name)
+                .help(help)
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with_all(conflicts),
+        );
+    }
+    let parsed = command
+        .try_get_matches_from(scanned.argv.iter().cloned())
+        .and_then(|matches| {
+            let mut cli = Cli::from_arg_matches(&matches)?;
+            for &(name, _, key, value) in &app.config_flags {
+                if matches.get_flag(name) {
+                    cli.product_overrides.set(key, value);
+                }
+            }
+            Ok(cli)
+        });
+    match parsed {
         Ok(Cli {
             command: Some(Commands::Completions(args)),
             ..
