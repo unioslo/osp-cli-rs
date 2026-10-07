@@ -421,21 +421,38 @@ pub(crate) fn run_progress_command_with_ui(
         format_hint,
     } = result;
     let runtime = CommandRenderRuntime::new(config, ui);
-    if !messages.is_empty() {
+    let json_output = resolve_render_settings_with_hint(&ui.render_settings, format_hint).format
+        == OutputFormat::Json;
+    // A redrawn frame owns its messages: written separately, they would stay
+    // above every redraw and go stale.
+    let framed = output.meta.progress_replace
+        && !json_output
+        && sink.stderr_is_terminal()
+        && !progress_output_is_empty(&output);
+    if !messages.is_empty() && !framed {
         emit_messages_with_runtime(&runtime, &messages, ui.message_verbosity, sink);
     }
     if progress_output_is_empty(&output) {
         return Ok(());
     }
 
-    let json_output = resolve_render_settings_with_hint(&ui.render_settings, format_hint).format
-        == OutputFormat::Json;
     let append_lines = !sink.stderr_is_terminal() || json_output;
-    let rendered = if append_lines && !output.meta.progress_append.is_empty() {
+    let mut rendered = if append_lines && !output.meta.progress_append.is_empty() {
         render_progress_lines_with_runtime(&runtime, &output.meta.progress_append, sink)
     } else {
         render_progress_output_with_runtime(&runtime, &output, format_hint, json_output, sink)
     };
+    if framed && !messages.is_empty() {
+        rendered.insert_str(
+            0,
+            &crate::ui::render_messages(
+                config,
+                &ui.render_settings,
+                &messages,
+                ui.message_verbosity,
+            ),
+        );
+    }
     if !rendered.is_empty() {
         let replace = output.meta.progress_replace && !json_output;
         sink.write_progress(&rendered, replace);

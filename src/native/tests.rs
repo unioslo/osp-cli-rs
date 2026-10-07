@@ -131,38 +131,41 @@ fn native_session_context_completion_refresh_request_is_one_shot_unit() {
 }
 
 #[test]
-fn native_session_context_pagination_is_replaceable_and_clearable_unit() {
+fn native_session_context_pages_back_through_stepped_pages_unit() {
+    let page = |n: &str, next: Option<&str>| NativePagination {
+        current: vec!["list".to_string(), n.to_string()],
+        next: next.map(|next| vec!["list".to_string(), next.to_string()]),
+    };
     let context = NativeSessionContext::default();
     assert_eq!(context.pagination(), None);
+    assert_eq!(context.step_page(true), None);
 
-    let first = NativePagination {
-        previous: None,
-        next: Some(vec![
-            "orch".to_string(),
-            "task".to_string(),
-            "list".to_string(),
-        ]),
-    };
-    context.set_pagination(first.clone());
-    assert_eq!(context.pagination(), Some(first));
+    context.set_pagination(page("1", Some("2")));
+    assert!(!context.has_previous_page());
+    assert_eq!(context.step_page(false), None);
+    assert_eq!(
+        context.step_page(true),
+        Some(vec!["list".to_string(), "2".to_string()])
+    );
+    context.set_pagination(page("2", None));
+    context.finish_page_step();
+    assert!(context.has_previous_page());
+    assert_eq!(context.step_page(true), None);
 
-    let second = NativePagination {
-        previous: Some(vec![
-            "orch".to_string(),
-            "task".to_string(),
-            "list".to_string(),
-        ]),
-        next: None,
-    };
-    context.set_pagination(second.clone());
-    assert_eq!(context.pagination(), Some(second.clone()));
-    assert_eq!(context.take_pagination(), Some(second));
-    assert_eq!(context.pagination(), None);
+    assert_eq!(
+        context.step_page(false),
+        Some(vec!["list".to_string(), "1".to_string()])
+    );
+    context.set_pagination(page("1", Some("2")));
+    context.finish_page_step();
+    assert!(!context.has_previous_page());
 
-    context.set_pagination(NativePagination {
-        previous: None,
-        next: None,
-    });
+    // A command run outside paging starts a fresh history.
+    context.step_page(true);
+    context.finish_page_step();
+    context.set_pagination(page("9", None));
+    assert!(!context.has_previous_page());
+
     context.clear_pagination();
     assert_eq!(context.pagination(), None);
 }

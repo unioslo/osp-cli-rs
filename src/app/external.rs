@@ -683,7 +683,7 @@ fn add_native_pagination_hint(result: &mut CliCommandResult, context: &NativeSes
     let Some(pagination) = context.pagination() else {
         return;
     };
-    let text = match (pagination.previous.is_some(), pagination.next.is_some()) {
+    let text = match (context.has_previous_page(), pagination.next.is_some()) {
         (true, true) => {
             "More results are available. Type `next` or press Shift+→ for the next page, `prev` or Shift+← for the previous."
         }
@@ -1314,8 +1314,8 @@ JSON
         assert!(result.messages.is_empty());
 
         context.set_pagination(NativePagination {
-            previous: None,
-            next: Some(vec!["orch".to_string()]),
+            current: vec!["orch".to_string(), "1".to_string()],
+            next: Some(vec!["orch".to_string(), "2".to_string()]),
         });
         add_native_pagination_hint(&mut result, &context);
         assert_eq!(
@@ -1324,9 +1324,10 @@ JSON
         );
 
         let mut result = CliCommandResult::exit(0);
+        context.step_page(true);
         context.set_pagination(NativePagination {
-            previous: Some(vec!["orch".to_string()]),
-            next: Some(vec!["orch".to_string()]),
+            current: vec!["orch".to_string(), "2".to_string()],
+            next: Some(vec!["orch".to_string(), "3".to_string()]),
         });
         add_native_pagination_hint(&mut result, &context);
         assert!(result.messages.entries()[0].text.contains("`prev`"));

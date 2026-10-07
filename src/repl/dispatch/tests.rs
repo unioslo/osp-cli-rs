@@ -886,7 +886,7 @@ fn repl_unrelated_lines_clear_native_pagination_context_unit() {
         .session
         .native_context
         .set_pagination(crate::native::NativePagination {
-            previous: None,
+            current: vec!["page".to_string()],
             next: Some(vec!["trusted".to_string()]),
         });
 
@@ -904,7 +904,7 @@ fn repl_unrelated_lines_clear_native_pagination_context_unit() {
         .session
         .native_context
         .set_pagination(crate::native::NativePagination {
-            previous: None,
+            current: vec!["page".to_string()],
             next: Some(vec!["trusted".to_string()]),
         });
     assert!(

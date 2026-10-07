@@ -238,10 +238,21 @@ pub struct NativePromptContextEntry {
 /// an arbitrary continuation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativePagination {
-    /// Tokenized command to run for the previous page, if one exists.
-    pub previous: Option<Vec<String>>,
+    /// Tokenized command that produced the current page. The REPL replays it
+    /// to step back here, so commands never compute a previous page.
+    pub current: Vec<String>,
     /// Tokenized command to run for the next page, if one exists.
     pub next: Option<Vec<String>>,
+}
+
+#[derive(Default)]
+struct PaginationState {
+    page: Option<NativePagination>,
+    /// Commands for the pages already stepped past, newest last.
+    back: Vec<Vec<String>>,
+    /// Back stack handed to the page the REPL is about to run; it applies only
+    /// if that command publishes pagination again.
+    carried: Option<Vec<Vec<String>>>,
 }
 
 /// Session-scoped context shared between native commands and the REPL host.
@@ -253,7 +264,7 @@ pub struct NativePagination {
 pub struct NativeSessionContext {
     values: Arc<RwLock<BTreeMap<String, String>>>,
     prompt_entries: Arc<RwLock<BTreeMap<String, NativePromptContextEntry>>>,
-    pagination: Arc<RwLock<Option<NativePagination>>>,
+    pagination: Arc<RwLock<PaginationState>>,
     completion_refresh_requested: Arc<AtomicBool>,
 }
 
@@ -323,8 +334,9 @@ impl NativeSessionContext {
 
     /// Replaces the trusted native-command pagination context for this REPL.
     pub fn set_pagination(&self, pagination: NativePagination) {
-        if let Ok(mut current) = self.pagination.write() {
-            *current = Some(pagination);
+        if let Ok(mut state) = self.pagination.write() {
+            state.back = state.carried.take().unwrap_or_default();
+            state.page = Some(pagination);
         }
     }
 
@@ -333,21 +345,46 @@ impl NativeSessionContext {
         self.pagination
             .read()
             .ok()
-            .and_then(|current| current.clone())
+            .and_then(|state| state.page.clone())
     }
 
     /// Clears any native-command pagination context.
     pub fn clear_pagination(&self) {
-        if let Ok(mut current) = self.pagination.write() {
-            *current = None;
+        if let Ok(mut state) = self.pagination.write() {
+            state.page = None;
+            state.back.clear();
         }
     }
 
-    pub(crate) fn take_pagination(&self) -> Option<NativePagination> {
+    /// Whether the REPL can step back to an earlier page.
+    pub(crate) fn has_previous_page(&self) -> bool {
         self.pagination
-            .write()
-            .ok()
-            .and_then(|mut current| current.take())
+            .read()
+            .is_ok_and(|state| state.page.is_some() && !state.back.is_empty())
+    }
+
+    /// Picks the command for the next or previous page and carries the back
+    /// stack it implies over to that page. `None` at either boundary.
+    pub(crate) fn step_page(&self, forward: bool) -> Option<Vec<String>> {
+        let mut state = self.pagination.write().ok()?;
+        let page = state.page.as_ref()?;
+        let mut back = state.back.clone();
+        let command = if forward {
+            let next = page.next.clone()?;
+            back.push(page.current.clone());
+            next
+        } else {
+            back.pop()?
+        };
+        state.carried = Some(back);
+        Some(command)
+    }
+
+    /// Drops a carried back stack the stepped-to command did not claim.
+    pub(crate) fn finish_page_step(&self) {
+        if let Ok(mut state) = self.pagination.write() {
+            state.carried = None;
+        }
     }
 
     /// Requests rebuilding the active REPL completion tree after execution.
