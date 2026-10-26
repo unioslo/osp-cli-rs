@@ -18,6 +18,7 @@ pub(super) enum ReplBuiltin {
     HelpAll,
     Recording(Option<crate::repl::recording::RecordingCommand>),
     Exit,
+    Up,
     Last,
     Pagination(PaginationDirection),
     Source(SourceCommand),
@@ -103,6 +104,11 @@ pub(super) fn execute_repl_builtin(
             )?))
         }
         ReplBuiltin::Exit => Ok(handle_repl_exit_request(&mut state.session)),
+        ReplBuiltin::Up => Ok(if state.session.scope.is_root() {
+            ReplResult::Continue
+        } else {
+            handle_repl_exit_request(&mut state.session)
+        }),
         ReplBuiltin::Last => {
             execute_last_result_builtin(&mut state.runtime, &mut state.session, raw, sink)
         }
@@ -124,6 +130,9 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
     }
     if raw == "exit" || raw == "quit" {
         return Ok(Some(ReplBuiltin::Exit));
+    }
+    if raw == ".." {
+        return Ok(Some(ReplBuiltin::Up));
     }
     if let Some((_, direction)) = PaginationDirection::COMMANDS
         .iter()

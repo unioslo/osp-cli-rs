@@ -190,7 +190,11 @@ Shells do not nest. Typing another shell's root switches to it: inside `orch`,
 `nh` leaves the `orch` shell and enters the `nh` shell, and `exit` returns to
 root.
 
-Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
+Type `..` on its own to leave any command shell and return to root. At root,
+`..` does nothing and keeps the REPL open. Surrounding whitespace is allowed;
+arguments and pipeline stages are not supported.
+
+Shell controls such as `..`, `exit`, `quit`, and bare `help` stay REPL-owned. They
 manage the shell rather than dispatching a normal command.
 
 Host commands such as `doctor last -v`, `config`, and `history` keep their root

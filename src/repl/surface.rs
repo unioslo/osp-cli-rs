@@ -234,7 +234,7 @@ fn root_word_priority(word: &str) -> (u8, u8) {
 }
 
 fn root_word_can_appear_in_intro(word: &str) -> bool {
-    !matches!(word, "exit" | "quit")
+    !matches!(word, "exit" | "quit" | "..")
         && !word.starts_with('-')
         && !matches!(word, "|" | "F" | "P" | "V")
 }
@@ -304,6 +304,7 @@ fn command_spec_from_catalog(entry: &CommandCatalogEntry) -> Option<CompletionNo
             | "last"
             | "exit"
             | "quit"
+            | ".."
             | CMD_DOCTOR
             | CMD_PLUGINS
             | CMD_THEME

@@ -253,7 +253,7 @@ pub(super) fn enter_repl_shell(
         .unwrap_or_default();
     state.session.enter_repl_scope(command.to_string());
     out.push_str(&format!(
-        "Entering {command} shell. Type `exit` to leave.\n"
+        "Entering {command} shell. Type `..` or `exit` to leave.\n"
     ));
     if let Ok(help) = render_repl_help_for_scope(state, invocation, "", &[], sink) {
         out.push_str(&help);

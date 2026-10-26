@@ -19,6 +19,7 @@ history           Inspect or prune REPL history
 context           Inspect or clear remembered session values
 each              Run a command for every value of the saved result
 recording         Record commands, output and HTTP timing as private JSON Lines
+..                Leave the current shell (stay at root if already there)
 notifications     Preview local terminal feedback (no service requests)
 
 Pipe command output with |; use | H for in-band DSL help.

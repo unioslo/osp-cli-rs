@@ -986,7 +986,7 @@ pub(crate) fn is_help_all(tokens: &[String]) -> bool {
         && ReplHelpCommand::try_parse_from(tokens).is_ok_and(|help| help.all)
 }
 
-pub(crate) fn repl_only_commands() -> [clap::Command; 7] {
+pub(crate) fn repl_only_commands() -> [clap::Command; 8] {
     use clap::{Arg, ArgAction, Command, ValueHint};
     [
         <ReplHelpCommand as clap::CommandFactory>::command(),
@@ -1017,6 +1017,7 @@ pub(crate) fn repl_only_commands() -> [clap::Command; 7] {
         <crate::repl::recording::RecordingCommand as clap::CommandFactory>::command(),
         Command::new("exit").about("Exit REPL"),
         Command::new("quit").about("Exit REPL"),
+        Command::new("..").about("Leave the current shell (stay at root if already there)"),
     ]
 }
 

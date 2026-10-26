@@ -20,7 +20,7 @@ use crate::cli::{HistoryArgs, HistoryCommands, HistoryPruneArgs};
 use crate::app::{CMD_HISTORY, CMD_LIST, CommandOutput, DEFAULT_REPL_PROMPT, config_usize};
 use crate::cli::rows::output::rows_to_output_result;
 
-const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 4] = ["exit", "quit", "help", "history*"];
+const DEFAULT_REPL_HISTORY_EXCLUDES: [&str; 5] = ["exit", "quit", "..", "help", "history*"];
 const DEFAULT_HISTORY_LIST_LIMIT: usize = 20;
 const HISTORY_TIMESTAMP_EXAMPLES: &str = "expected YYYY-MM-DD, YYYY-MM-DD HH:MM[:SS], or RFC3339-like input such as 2026-08-11T10:00:00Z or 2026-08-11T12:00:00+02:00";
 
@@ -384,6 +384,7 @@ mod tests {
 
         assert!(patterns.contains(&"exit".to_string()));
         assert!(patterns.contains(&"quit".to_string()));
+        assert!(patterns.contains(&"..".to_string()));
         assert!(patterns.contains(&"help".to_string()));
         assert!(patterns.contains(&"history*".to_string()));
     }

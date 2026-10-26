@@ -26,33 +26,38 @@ fn repl_builtin_overrides_do_not_mutate_runtime_ui_state_unit() {
 }
 
 #[test]
-fn repl_exit_is_host_owned_at_root_but_leaves_shell_in_scope_unit() {
+fn repl_navigation_is_host_owned_at_root_and_in_shell_scope_unit() {
     let (mut state, _state_root) = make_test_state(Vec::new());
     let (history, _history_root) = make_test_history(&mut state);
 
-    let root_exit = repl_dispatch::execute_repl_plugin_line(
-        &mut state,
-        &history,
-        "exit", None,).map(|executed| executed.result)
-    .expect("root exit should be handled by host dispatch");
-    assert_eq!(root_exit, crate::repl::ReplResult::Exit(0));
+    for (command, root_result) in [
+        ("exit", crate::repl::ReplResult::Exit(0)),
+        ("quit", crate::repl::ReplResult::Exit(0)),
+        ("..", crate::repl::ReplResult::Continue),
+        ("  ..  ", crate::repl::ReplResult::Continue),
+    ] {
+        let result =
+            repl_dispatch::execute_repl_plugin_line(&mut state, &history, command, None)
+                .expect("root navigation should be handled by host dispatch")
+                .result;
+        assert_eq!(result, root_result, "command: {command}");
 
-    state.session.scope.enter("orch");
-    let shell_exit = repl_dispatch::execute_repl_plugin_line(
-        &mut state,
-        &history,
-        "exit", None,).map(|executed| executed.result)
-    .expect("shell exit should leave the current shell");
-    match shell_exit {
-        crate::repl::ReplResult::Restart {
-            output: text,
-            reload: crate::repl::ReplReloadKind::Completion,
-        } => {
-            assert!(text.contains("Leaving orch shell"));
+        for shell in ["orch", "ldap"] {
+            state.session.enter_repl_scope(shell);
+            let result =
+                repl_dispatch::execute_repl_plugin_line(&mut state, &history, command, None)
+                    .expect("navigation should leave the current shell")
+                    .result;
+            assert_eq!(
+                result,
+                crate::repl::ReplResult::Restart {
+                    output: format!("Leaving {shell} shell. Back at root.\n"),
+                    reload: crate::repl::ReplReloadKind::Completion,
+                }
+            );
+            assert!(state.session.scope.is_root());
         }
-        other => panic!("unexpected repl result: {other:?}"),
     }
-    assert!(state.session.scope.is_root());
 }
 
 #[test]

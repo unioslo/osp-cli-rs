@@ -321,6 +321,13 @@ fn apply_shell_root_controls(root: &mut CompletionNode) {
             sort: Some("2".to_string()),
             ..CompletionNode::default()
         });
+    root.children
+        .entry("..".to_string())
+        .or_insert_with(|| CompletionNode {
+            tooltip: Some("Leave the current shell".to_string()),
+            sort: Some("3".to_string()),
+            ..CompletionNode::default()
+        });
 
     let mut suggestions = root
         .children
@@ -364,7 +371,7 @@ fn inject_invocation_flags(node: &mut CompletionNode) {
 }
 
 fn repl_host_command_without_invocation_flags(name: &str) -> bool {
-    matches!(name, "help" | "last" | "exit" | "quit")
+    matches!(name, "help" | "last" | "exit" | "quit" | "..")
 }
 
 fn invocation_flag_nodes() -> Vec<(String, FlagNode)> {
@@ -570,6 +577,7 @@ mod tests {
         assert!(rooted.root.children.contains_key("help"));
         assert!(rooted.root.children.contains_key("exit"));
         assert!(rooted.root.children.contains_key("quit"));
+        assert!(rooted.root.children.contains_key(".."));
         assert!(!rooted.root.children.contains_key("ldap"));
         let suggestions = rooted.root.args[0]
             .suggestions
@@ -579,12 +587,14 @@ mod tests {
         assert!(suggestions.contains(&"user"));
         assert!(suggestions.contains(&"help"));
         assert!(suggestions.contains(&"exit"));
+        assert!(suggestions.contains(&".."));
 
         let mut unknown = ReplScopeStack::default();
         unknown.enter("missing");
         let fallback = scope_completion_tree(&tree, &unknown);
         assert!(fallback.root.children.contains_key("ldap"));
         assert!(fallback.root.children.contains_key("exit"));
+        assert!(fallback.root.children.contains_key(".."));
     }
 
     #[test]
@@ -594,6 +604,8 @@ mod tests {
             .insert("ldap".to_string(), CompletionNode::default());
         root.children
             .insert("exit".to_string(), CompletionNode::default());
+        root.children
+            .insert("..".to_string(), CompletionNode::default());
 
         inject_invocation_flags(&mut root);
 
@@ -606,6 +618,7 @@ mod tests {
         assert!(root.children["ldap"].flags.contains_key("--format"));
         assert!(root.children["ldap"].flags.contains_key("--source-record"));
         assert!(!root.children["exit"].flags.contains_key("--json"));
+        assert!(!root.children[".."].flags.contains_key("--json"));
         assert_eq!(
             root.flags["--format"]
                 .suggestions

@@ -14,7 +14,7 @@ fn spawn_repl(plugins: &Path) -> ReplPtySession {
     ReplPtySession::spawn(
         ReplPtyConfig::default()
             .with_plugins_dir(plugins)
-            .with_config("[default]\nrepl.shellable_commands = [\"orch\"]\n"),
+            .with_config("[default]\nrepl.shellable_commands = [\"orch\", \"ldap\"]\n"),
     )
 }
 
@@ -55,6 +55,7 @@ fn repl_shell_entry_and_exit_refresh_the_prompt_scope() {
     }
     let plugins = make_temp_dir("osp-cli-pty-shell-prompt-plugins");
     let _plugin = write_provider_plugin(&plugins, "orch", "orch", "orch");
+    let _ldap = write_provider_plugin(&plugins, "ldap", "ldap", "ldap");
     let mut session = spawn_repl(&plugins);
 
     assert!(
@@ -63,24 +64,30 @@ fn repl_shell_entry_and_exit_refresh_the_prompt_scope() {
         session.output_snapshot(2000),
     );
 
-    let entered = session.output_len();
-    session.write_bytes(b"orch\r");
-    assert!(
-        session.wait_for_output_since(entered, "default [orch]>", Duration::from_secs(1)),
-        "expected entered shell in prompt; output:\n{}",
-        session.output_snapshot(4000),
-    );
+    for shell in ["orch", "ldap"] {
+        for leave in ["exit", "quit", "  ..  "] {
+            let entered = session.output_len();
+            session.write_bytes(format!("..\r{shell}\r").as_bytes());
+            assert!(
+                session.wait_for_output_since(
+                    entered,
+                    &format!("default [{shell}]>"),
+                    Duration::from_secs(1),
+                ),
+                "expected shell prompt after harmless root navigation; output:\n{}",
+                session.output_snapshot(4000),
+            );
 
-    let left = session.output_len();
-    session.write_bytes(b"exit\r");
-    assert!(
-        session.wait_for_output_since(left, "default>", Duration::from_secs(1)),
-        "expected root prompt after shell exit; output:\n{}",
-        session.output_snapshot(4000),
-    );
+            let left = session.output_len();
+            session.write_bytes(format!("{leave}\r").as_bytes());
+            assert!(
+                session.wait_for_output_since(left, "default>", Duration::from_secs(1)),
+                "expected root prompt after `{leave}` in `{shell}`; output:\n{}",
+                session.output_snapshot(4000),
+            );
+        }
+    }
 
     session.write_bytes(b"exit\r\r");
-    if !session.wait_for_exit(HANG_TIMEOUT) {
-        session.kill();
-    }
+    assert!(session.wait_for_exit(HANG_TIMEOUT), "root exit should quit");
 }
