@@ -34,7 +34,7 @@ pub(crate) struct InteractiveLoopConfig<'a> {
 pub(crate) struct SubmissionContext<'a, F> {
     pub(crate) history_store: &'a SharedHistory,
     pub(crate) root_input: bool,
-    pub(crate) exit_on_interrupt: bool,
+    pub(crate) exit_on_escape: bool,
     pub(crate) execute: &'a mut F,
 }
 
@@ -89,7 +89,7 @@ where
     } = config;
 
     let mut bindings = build_repl_keybindings();
-    if submission.exit_on_interrupt {
+    if submission.exit_on_escape {
         bindings.add_binding(KeyModifiers::NONE, KeyCode::Esc, ReedlineEvent::CtrlD);
     }
     let mut action_keys = std::collections::HashSet::new();
@@ -257,9 +257,6 @@ where
         let read = match crate::ui::prompt::read_line(&mut line) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
                 StdIoUiSink.write_stderr("\n");
-                if submission.exit_on_interrupt {
-                    return Ok(ReplResult::Exit(0));
-                }
                 continue;
             }
             result => result?,
@@ -555,7 +552,7 @@ where
         Signal::CtrlD => Ok(Some(ReplResult::Exit(0))),
         Signal::CtrlC => {
             submission.root_input = false;
-            Ok(submission.exit_on_interrupt.then_some(ReplResult::Exit(0)))
+            Ok(None)
         }
         // No other host commands are bound and no external break is wired.
         _ => Ok(None),
@@ -751,7 +748,7 @@ mod tests {
         };
         let mut submission = SubmissionContext {
             root_input: false,
-            exit_on_interrupt: false,
+            exit_on_escape: true,
             history_store: &history,
             execute: &mut execute,
         };

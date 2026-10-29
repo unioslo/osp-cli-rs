@@ -124,12 +124,12 @@ where
         line_projector,
         actions,
         on_start,
-        exit_on_interrupt,
+        exit_on_escape,
     } = config;
     let history_store = SharedHistory::new(history_config);
     let mut submission = SubmissionContext {
         root_input: false,
-        exit_on_interrupt,
+        exit_on_escape,
         history_store: &history_store,
         execute: &mut execute,
     };

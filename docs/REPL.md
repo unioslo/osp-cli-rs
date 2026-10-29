@@ -38,6 +38,14 @@ visible output into terminal scrollback. Ctrl-L clears the REPL the same way
 and keeps the current input. Clearing uses the terminal height when a cursor
 row is unavailable without a blocking query; it never purges scrollback.
 
+## Guided sessions
+
+Guided embedded sessions use the same Ctrl-C cancellation as the normal REPL:
+clear the current line or cancel the active command/prompt, then keep the
+session. Leave with `exit`, or Ctrl-D or Esc on an empty line. Nonempty Ctrl-D
+and Esc remain editor actions and do not leave the session. Password prompts
+still treat Ctrl-C as cancellation, never as a successful empty answer.
+
 ## Intro and help documents
 
 The intro and root `help` compose ordered semantic document blocks. Configure

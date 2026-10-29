@@ -269,7 +269,7 @@ fn build_repl_cycle_run_config(
         runtime.config.resolved(),
     )))
     .build();
-    config.exit_on_interrupt = runtime.definition.repl_line_handler.is_some();
+    config.exit_on_escape = runtime.definition.repl_line_handler.is_some();
     config.actions = actions;
     if runtime.ui.render_settings.requested_format() != crate::core::output::OutputFormat::Json {
         let commands = crate::app::runtime::visible_native_commands(&runtime.auth, clients)
