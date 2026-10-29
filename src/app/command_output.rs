@@ -52,6 +52,8 @@ impl CommandBody {
 
 #[derive(Debug)]
 pub(crate) struct CommandOutput {
+    /// Canonical executed path, retained independently of arguments and aliases.
+    pub(crate) command_path: Vec<String>,
     pub(crate) diagnostics: (String, String),
     pub(crate) retained_evidence: String,
     pub(crate) exit_code: i32,
@@ -75,6 +77,7 @@ pub(crate) struct CommandOutput {
 impl CommandOutput {
     pub(crate) fn exit(exit_code: i32) -> Self {
         Self {
+            command_path: Vec::new(),
             diagnostics: Default::default(),
             retained_evidence: String::new(),
             exit_code,
@@ -180,6 +183,7 @@ impl CommandOutput {
         }
         Self {
             body,
+            command_path: self.command_path.clone(),
             source: self.source.clone(),
             use_source: self.use_source,
             format_hint: self.format_hint,
@@ -393,6 +397,10 @@ pub(crate) fn run_cli_command(
     result: &CommandOutput,
     sink: &mut dyn UiSink,
 ) -> Result<i32> {
+    let mut ui = ui.clone();
+    super::host::apply_command_format(config, &mut ui, &result.command_path);
+    let ui = &ui;
+
     super::sink::write_diagnostics(sink, &result.diagnostics.0, &ui.render_settings);
     if ui.render_settings.format == OutputFormat::Json
         && result.exit_code != 0

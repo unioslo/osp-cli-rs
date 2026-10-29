@@ -231,6 +231,7 @@ fn launch_json_flag_formats_output_without_mutating_config_contract() {
 [default]
 profile.default = "uio"
 ui.format = "table"
+ui.command_formats.config.get = "json"
 "#,
     );
 
@@ -254,5 +255,30 @@ ui.format = "table"
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+
+    let run = |flags: &[&str]| {
+        let mut cmd = crate::test_env::command(assert_cmd::cargo::cargo_bin!("osp"));
+        cmd.envs(crate::test_env::isolated_env(&home))
+            .env("PATH", "/usr/bin:/bin")
+            .args(["config", "get", "ui.format"])
+            .args(flags)
+            .assert().success().get_output().stdout.clone()
+    };
+    let configured = run(&[]);
+    assert_eq!(first_json_row(&parse_json_stdout(&configured), "command default")["value"], "table");
+    let table = run(&["--table"]);
+    assert!(String::from_utf8_lossy(&table).contains("ui.format"));
+    assert!(serde_json::from_slice::<serde_json::Value>(&table).is_err());
+    let automatic = run(&["--format", "auto"]);
+    assert!(serde_json::from_slice::<serde_json::Value>(&automatic).is_err());
+
+    let mut explain = crate::test_env::command(assert_cmd::cargo::cargo_bin!("osp"));
+    let explained = explain.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "explain", "ui.command_formats.config.get"])
+        .assert().success().get_output().stdout.clone();
+    let provenance = parse_json_stdout(&explained);
+    assert_eq!(provenance["value"], "json");
+    assert_eq!(provenance["source"], "file");
 
 }

@@ -57,7 +57,7 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
     .expect("global list value should be written");
     set_scoped_value_in_toml(
         &path,
-        "ui.format",
+        "ui.command_formats.mreg.host.info",
         &ConfigValue::String("mreg".to_string()),
         &Scope {
             profile: Some("tsd".to_string()),
@@ -74,7 +74,10 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
                 .with_terminal("repl"),
         )
         .expect("scoped config should resolve");
-    assert_eq!(resolved.get_string("ui.format"), Some("mreg"));
+    assert_eq!(
+        resolved.get_string("ui.command_formats.mreg.host.info"),
+        Some("mreg")
+    );
     assert_eq!(
         resolved.get_string_list("theme.path"),
         Some(vec!["json".to_string(), "table".to_string()])
@@ -82,7 +85,7 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
 
     let unset = unset_scoped_value_in_toml(
         &path,
-        "ui.format",
+        "ui.command_formats.mreg.host.info",
         &Scope {
             profile: Some("tsd".to_string()),
             terminal: Some("repl".to_string()),
@@ -102,7 +105,10 @@ fn config_store_round_trips_terminal_profile_scope_and_list_values_through_reloa
                 .with_terminal("repl"),
         )
         .expect("updated config should resolve");
-    assert_eq!(updated.get_string("ui.format"), None);
+    assert_eq!(
+        updated.get_string("ui.command_formats.mreg.host.info"),
+        None
+    );
     assert_eq!(
         updated.get_string_list("theme.path"),
         Some(vec!["json".to_string(), "table".to_string()])

@@ -82,6 +82,17 @@ pub(super) fn run_external_command(
             &options,
         );
     }
+    if let Some(scanned) = &scanned {
+        let prefixes =
+            crate::command_words::CommandPrefixes::from_config(state.runtime.config.resolved())
+                .enabled(state.runtime.context.terminal_kind() == TerminalKind::Repl);
+        let path = super::command_plan::canonical_builtin_path(prefixes, &scanned.tokens)?;
+        super::host::apply_command_format(
+            state.runtime.config.resolved(),
+            &mut invocation.ui,
+            &path,
+        );
+    }
     if let (Ok((parsed, _)), Some(scanned)) = (&expanded, &scanned)
         && crate::cli::is_help_all(&scanned.tokens)
     {
@@ -395,6 +406,7 @@ fn run_native_invocation(
     let diagnostics = crate::diagnostics::DiagnosticSink::default();
     let _scope = diagnostics.enter();
     let level = input.invocation.ui.verbosity;
+    let mut command_path = Vec::new();
     let result: Result<CommandOutput> = (|| {
         let name = input.command_path.as_str();
         let args = input.args;
@@ -434,6 +446,14 @@ fn run_native_invocation(
             parsed,
             &intent,
         )?;
+        command_path = parsed.path.as_slice().to_vec();
+        let mut invocation = invocation.clone();
+        super::host::apply_command_format(
+            state.runtime.config.resolved(),
+            &mut invocation.ui,
+            &command_path,
+        );
+        let invocation = &invocation;
         state.runtime.auth.refresh_native_auth(&command.describe());
         ensure_external_access(&state.runtime, &parsed.path, intent.requirement, "command")?;
 
@@ -544,6 +564,7 @@ fn run_native_invocation(
     })();
     match result {
         Ok(mut output) => {
+            output.command_path = command_path;
             output.retained_evidence = diagnostics
                 .render(crate::core::MessageLevel::Evidence, output.exit_code != 0)
                 .0;
@@ -1209,6 +1230,13 @@ fn run_external_plugin_command(
     before_external_run(&mut state.runtime, &path, requirement, "plugin command")?;
     state.reload_config_after_access_hook()?;
     ensure_external_access(&state.runtime, &path, requirement, "plugin command")?;
+    let mut invocation = invocation.clone();
+    super::host::apply_command_format(
+        state.runtime.config.resolved(),
+        &mut invocation.ui,
+        path.as_slice(),
+    );
+    let invocation = &invocation;
     mark_repl_command_accepted(accepted);
     let capture = !help
         && (plugin
@@ -1217,6 +1245,7 @@ fn run_external_plugin_command(
             .is_some_and(|d| d.output.as_deref() == Some("json"))
             || !parsed.stages.is_empty()
             || invocation.ui.render_settings.format_explicit
+            || invocation.ui.render_settings.format != crate::core::OutputFormat::Auto
             || invocation.source);
     let mut context = plugin_dispatch_context_for(&state.runtime, Some(invocation));
     let selected_context = state
@@ -1455,6 +1484,7 @@ fn run_external_plugin_command(
     result.retained_evidence = diagnostics
         .render(crate::core::MessageLevel::Evidence, result.exit_code != 0)
         .0;
+    result.command_path = path.as_slice().to_vec();
     result.diagnostics = diagnostics.render(invocation.ui.verbosity, result.exit_code != 0);
     Ok(result)
 }

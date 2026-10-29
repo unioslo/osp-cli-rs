@@ -353,9 +353,25 @@ pub(crate) fn run_scanned_with_sink_and_app(
         Ok(mut cli) => {
             if let Some(Commands::External(tokens)) = cli.command.as_mut() {
                 tokens.extend(suffix);
-                run(cli, scanned.invocation.clone(), &[], sink, app, timing)
+                run(
+                    cli,
+                    scanned.invocation.clone(),
+                    &[],
+                    &resolved_command_path(&help_command, &scanned.argv),
+                    sink,
+                    app,
+                    timing,
+                )
             } else {
-                run(cli, scanned.invocation.clone(), &stages, sink, app, timing)
+                run(
+                    cli,
+                    scanned.invocation.clone(),
+                    &stages,
+                    &resolved_command_path(&help_command, &scanned.argv),
+                    sink,
+                    app,
+                    timing,
+                )
             }
         }
         Err(err) => handle_clap_parse_error(scanned, &help_command, err, &stages, sink, app),
@@ -546,6 +562,7 @@ fn run(
     mut cli: Cli,
     invocation: InvocationOptions,
     stages: &[String],
+    command_path: &[String],
     sink: &mut dyn UiSink,
     app: &std::sync::Arc<super::AppDefinition>,
     timing: &mut TimingSummary,
@@ -568,6 +585,13 @@ fn run(
     ) {
         sink.write_stdout(&help);
         return Ok(0);
+    }
+    if matches!(dispatch.action, RunAction::Builtin(_)) {
+        apply_command_format(
+            state.runtime.config.resolved(),
+            &mut invocation_ui.ui,
+            command_path,
+        );
     }
     if !stages.is_empty()
         && matches!(
@@ -810,6 +834,21 @@ pub(crate) fn resolve_invocation_ui(
         help_level,
     }
 }
+/// Applies an exact configured default only to this invocation's settings clone.
+pub(crate) fn apply_command_format(config: &ResolvedConfig, ui: &mut UiState, path: &[String]) {
+    if ui.render_settings.format_explicit || path.is_empty() {
+        return;
+    }
+    let key = format!("ui.command_formats.{}", path.join("."));
+    if let Some(format) = config
+        .get_string(&key)
+        .and_then(crate::core::OutputFormat::parse)
+    {
+        ui.render_settings.format = format;
+        ui.render_settings.guide_default_format = false;
+    }
+}
+
 /// Maps a reported error to the CLI exit code family used by OSP.
 pub fn classify_exit_code(err: &miette::Report) -> i32 {
     let known = KnownErrorChain::inspect(err);

@@ -25,6 +25,31 @@ pub(crate) enum InlineCommandPlan {
     Help(clap::Error),
 }
 
+/// Resolves command words with the same grammars used for execution, excluding values.
+pub(crate) fn canonical_builtin_path(prefixes: bool, tokens: &[String]) -> Result<Vec<String>> {
+    let tokens = tokens.strip_prefix(&["sudo".to_owned()]).unwrap_or(tokens);
+    let Some((name, args)) = tokens.split_first() else {
+        return Ok(Vec::new());
+    };
+    let builtin = crate::cli::InlineCommandCli::command();
+    if let Some(command) = builtin.find_subcommand(name) {
+        let args = crate::command_words::normalize(command, args, prefixes, &[])
+            .map_err(|error| miette!("{error}"))?;
+        let matches = crate::cli::passive_command(builtin)
+            .try_get_matches_from(std::iter::once(name.clone()).chain(args));
+        let mut path = Vec::new();
+        if let Ok(matches) = matches {
+            let mut current = &matches;
+            while let Some((name, child)) = current.subcommand() {
+                path.push(name.to_owned());
+                current = child;
+            }
+        }
+        return Ok(path);
+    }
+    Ok(Vec::new())
+}
+
 pub(crate) fn parse_inline_command(
     tokens: &[String],
     surface: CommandSurface,
