@@ -46,6 +46,13 @@ an intro with Markdown headings, paragraphs, inline markup, and lists. Nested
 and loose list items retain their parent text. `{{ help }}` and `{{ overview }}`
 insert the root help blocks at that position.
 
+`{{session.login}}` expands to one sign-in row, including its trailing newline.
+Place the next template row immediately after it. The product supplies
+`SessionFacts.selected_credentials` and the matching named credential states.
+An empty selection emits nothing; a fully ready selection shows the effective
+user; partial sign-in names ready and missing services. This presentation does
+not change `SessionFacts.authenticated` or command access requirements.
+
 Fenced `osp` blocks contain passive JSON data; other fences and invalid JSON
 remain literal text. Repeated fences stay separate and ordered. Templates do
 not execute commands. `intro --json` emits a document object; `intro | L 2`

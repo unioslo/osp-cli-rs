@@ -553,6 +553,64 @@ fn repl_intro_template_placeholder_rules_unit() {
     assert!(expanded_rendered.contains(env!("CARGO_PKG_VERSION")));
     assert!(expanded_rendered.contains("{{missing}}"));
 
+    struct SignInFacts(crate::core::command_policy::SessionFacts);
+    impl crate::app::AccessPolicy for SignInFacts {
+        fn session_facts(&self) -> crate::core::command_policy::SessionFacts {
+            self.0.clone()
+        }
+    }
+    for (services, expected) in [
+        (vec![], "Before\nAfter"),
+        (
+            vec![("directory", "Directory", true)],
+            "Before\nLogged in as  oistes\nAfter",
+        ),
+        (
+            vec![("directory", "Directory", false)],
+            "Before\nLogged in as  Not signed in\nAfter",
+        ),
+        (
+            vec![
+                ("directory", "Directory", true),
+                ("registry", "Registry", false),
+            ],
+            "Before\nLogged in as  oistes (Directory; not signed in: Registry)\nAfter",
+        ),
+    ] {
+        let mut state = make_state(&[
+            ("ui.presentation", "compact"),
+            (
+                "repl.intro_template.compact",
+                "Before\n{{session.login}}After",
+            ),
+            ("user.name", "oistes"),
+        ]);
+        let mut facts = crate::core::command_policy::SessionFacts::default();
+        for (name, label, valid) in services {
+            facts
+                .selected_credentials
+                .push(crate::core::command_policy::SelectedCredential {
+                    name: name.into(),
+                    label: label.into(),
+                });
+            facts.credentials.insert(
+                name.into(),
+                crate::core::command_policy::CredentialState {
+                    valid,
+                    ttl_seconds: None,
+                },
+            );
+        }
+        state
+            .runtime
+            .set_access_policy(Some(std::sync::Arc::new(SignInFacts(facts))));
+        assert_eq!(
+            output_support::strip_ansi(&render_repl_intro(repl_view(&state), &intro_surface(&[])))
+                .trim(),
+            expected
+        );
+    }
+
     let sensitive = make_state(&[
         ("ui.presentation", "compact"),
         (

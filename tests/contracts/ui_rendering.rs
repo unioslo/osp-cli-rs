@@ -27,7 +27,7 @@ fn startup_is_a_compact_console_overview_not_a_pipe_manual() {
     let plain = crate::output_support::strip_ansi(&rendered);
     let lines = plain.lines().map(str::trim).collect::<Vec<_>>().join("\n");
     assert!(
-        lines.contains("Welcome anonymous!\nUser: Not authenticated\nTheme: Dracula"),
+        lines.contains("Welcome anonymous!\nUser: Not signed in\nTheme: Dracula"),
         "{plain}"
     );
     let pipes = plain
