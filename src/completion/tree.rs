@@ -232,8 +232,16 @@ impl CompletionTreeBuilder {
 }
 
 impl CompletionNode {
-    /// Projects visible clap grammar directly into completion metadata.
+    /// Projects built clap grammar into completion metadata.
+    ///
+    /// Automatic help flags are recognized without adding menu suggestions.
     pub fn from_clap(command: &clap::Command) -> Self {
+        let mut grammar = command.clone();
+        grammar.build();
+        Self::from_built_clap(&grammar, command)
+    }
+
+    fn from_built_clap(command: &clap::Command, declared: &clap::Command) -> Self {
         let mut required_common = Vec::new();
         let flags = command
             .get_arguments()
@@ -248,6 +256,12 @@ impl CompletionNode {
                     (
                         name,
                         FlagNode {
+                            hidden: matches!(
+                                arg.get_action(),
+                                clap::ArgAction::Help
+                                    | clap::ArgAction::HelpShort
+                                    | clap::ArgAction::HelpLong
+                            ),
                             alias_of: (index > 0).then(|| preferred.clone()).flatten(),
                             tooltip: clap_meta::arg_help(arg),
                             flag_only: !arg.get_action().takes_values(),
@@ -263,7 +277,8 @@ impl CompletionNode {
             .collect();
         // Native metadata previously crossed the sorted wire flag map.
         required_common.sort();
-        let names = command
+        // Keep declared command paths: the REPL already owns help navigation.
+        let names = declared
             .get_subcommands()
             .filter(|child| !child.is_hide_set())
             .map(|child| child.get_name().to_owned())
@@ -295,14 +310,17 @@ impl CompletionNode {
                 .collect(),
             flags,
             flag_hints: required_hints(required_common),
-            children: command
+            children: declared
                 .get_subcommands()
                 .filter(|child| !child.is_hide_set())
                 .flat_map(|child| {
                     std::iter::once(child.get_name())
                         .chain(child.get_visible_aliases())
                         .map(move |name| {
-                            let mut node = Self::from_clap(child);
+                            let grammar = command
+                                .find_subcommand(child.get_name())
+                                .expect("built grammar retains declared subcommands");
+                            let mut node = Self::from_built_clap(grammar, child);
                             node.name = name.to_owned();
                             (name.to_owned(), node)
                         })

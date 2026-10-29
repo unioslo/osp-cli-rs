@@ -107,34 +107,34 @@ fn doctor_clap_projection_and_repl_surface_have_path_flag_and_help_parity_unit()
         ProjectedCommandSurface {
             path: "doctor".to_string(),
             summary: Some("Run diagnostics checks".to_string()),
-            flags: vec![],
+            flags: vec!["--help".to_string(), "-h".to_string()],
         },
         ProjectedCommandSurface {
             path: "doctor all".to_string(),
             summary: Some("Run all visible diagnostics".to_string()),
-            flags: vec![],
+            flags: vec!["--help".to_string(), "-h".to_string()],
         },
         ProjectedCommandSurface {
             path: "doctor config".to_string(),
             summary: Some("Show config diagnostics".to_string()),
-            flags: vec![],
+            flags: vec!["--help".to_string(), "-h".to_string()],
         },
         ProjectedCommandSurface {
             path: "doctor last".to_string(),
             summary: Some(
                 "Show the last REPL failure; combine with -v/-vv/-vvv for more detail".to_string(),
             ),
-            flags: vec![],
+            flags: vec!["--help".to_string(), "-h".to_string()],
         },
         ProjectedCommandSurface {
             path: "doctor plugins".to_string(),
             summary: Some("Run plugin diagnostics".to_string()),
-            flags: vec![],
+            flags: vec!["--help".to_string(), "-h".to_string()],
         },
         ProjectedCommandSurface {
             path: "doctor theme".to_string(),
             summary: Some("Show theme diagnostics".to_string()),
-            flags: vec![],
+            flags: vec!["--help".to_string(), "-h".to_string()],
         },
     ];
 
