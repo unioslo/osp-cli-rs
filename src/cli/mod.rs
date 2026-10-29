@@ -939,7 +939,12 @@ pub(crate) fn command_help_document(
     } else {
         command.get_name()
     };
-    command = command.clone().bin_name(scope.command(name));
+    let bin_name = scope.command(name);
+    command = command.clone().bin_name(if bin_name.is_empty() {
+        name.to_string()
+    } else {
+        bin_name
+    });
     let tokens = help_parse_tokens(tokens);
     command.build();
     let parser = passive_command(command.clone());
@@ -988,7 +993,7 @@ pub(crate) fn is_help_all(tokens: &[String]) -> bool {
         && ReplHelpCommand::try_parse_from(tokens).is_ok_and(|help| help.all)
 }
 
-pub(crate) fn repl_only_commands() -> [clap::Command; 7] {
+pub(crate) fn repl_only_commands() -> [clap::Command; 6] {
     use clap::{Arg, ArgAction, Command, ValueHint};
     [
         <ReplHelpCommand as clap::CommandFactory>::command(),
@@ -1017,8 +1022,9 @@ pub(crate) fn repl_only_commands() -> [clap::Command; 7] {
                     .help("Continue after a command fails"),
             ),
         <crate::repl::recording::RecordingCommand as clap::CommandFactory>::command(),
-        Command::new("exit").about("Exit REPL"),
-        Command::new("quit").about("Exit REPL"),
+        Command::new("exit")
+            .visible_alias("quit")
+            .about("Exit REPL"),
     ]
 }
 

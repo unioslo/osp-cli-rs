@@ -211,6 +211,11 @@ impl Document {
         let subcommands = command
             .get_subcommands()
             .filter(|subcommand| !subcommand.is_hide_set())
+            // Clap owns parsing its generated help command; the host owns the
+            // help surface. Explicit help commands remain ordinary entries.
+            .filter(|subcommand| {
+                subcommand.get_name() != "help" || command.is_disable_help_subcommand_set()
+            })
             .map(|subcommand| DocumentEntry {
                 role: EntryRole::Command,
                 name: subcommand.get_name().to_string(),

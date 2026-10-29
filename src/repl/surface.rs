@@ -53,9 +53,18 @@ pub(crate) fn build_repl_surface(
     let help_layout = help_layout_from_config(view.config);
     let help_level = help_level(view.config, 0, 0);
 
-    let mut specs = crate::cli::repl_only_commands()
+    let repl_commands = crate::cli::repl_only_commands();
+    let mut specs = repl_commands
         .iter()
-        .map(|command| clap_command_spec(command, help_layout))
+        .flat_map(|command| {
+            let spec = clap_command_spec(command, help_layout);
+            std::iter::once(spec.clone()).chain(command.get_visible_aliases().map(move |alias| {
+                CompletionNode {
+                    name: alias.to_string(),
+                    ..spec.clone()
+                }
+            }))
+        })
         .collect::<Vec<_>>();
     specs.push(plugins_command_spec(catalog, help_layout));
     if let Some(command) = crate::cli::Cli::command().find_subcommand("notifications") {
@@ -91,9 +100,13 @@ pub(crate) fn build_repl_surface(
     let mut overview_entries = specs
         .iter()
         .filter(|spec| !spec.hidden)
-        .filter_map(|spec| {
+        .filter(|spec| {
+            !repl_commands
+                .iter()
+                .any(|command| command.get_all_aliases().any(|alias| alias == spec.name))
+        })
+        .map(|spec| {
             let summary = match spec.name.as_str() {
-                "quit" => return None,
                 "exit" => "Exit application.".to_string(),
                 "help" => "Show this command overview.".to_string(),
                 "last" => "Replay the last result (--raw before pipes).".to_string(),
@@ -105,17 +118,17 @@ pub(crate) fn build_repl_surface(
                         if !view.auth.external_command_access(&entry.name).is_runnable() {
                             overview.summary.push_str(" (restricted)");
                         }
-                        return Some(overview);
+                        return overview;
                     }
                     spec.tooltip
                         .clone()
                         .unwrap_or_else(|| "Command".to_string())
                 }
             };
-            Some(ReplOverviewEntry {
+            ReplOverviewEntry {
                 name: spec.name.clone(),
                 summary,
-            })
+            }
         })
         .collect::<Vec<_>>();
     // The overview has a historical presentation order independent of the menu.

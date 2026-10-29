@@ -37,7 +37,11 @@ impl PaginationDirection {
 pub(crate) fn command_names() -> Vec<String> {
     crate::cli::repl_only_commands()
         .iter()
-        .map(|command| command.get_name().to_owned())
+        .flat_map(|command| {
+            std::iter::once(command.get_name())
+                .chain(command.get_all_aliases())
+                .map(str::to_owned)
+        })
         .chain(
             PaginationDirection::COMMANDS
                 .iter()
