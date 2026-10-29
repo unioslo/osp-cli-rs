@@ -80,18 +80,24 @@ fn ldap_plugin_completes_subcommands_and_flags_contract() {
             .any(|item| item["id"] == "--attributes")
     );
 
-    let mut short_flags = fixture.osp();
-    short_flags.args(["repl", "debug-complete", "--line", "ldap user -"]);
-    let short_flags_output = short_flags.assert().success().get_output().clone();
-    let short_flags_payload = parse_json_stdout(&short_flags_output.stdout);
-    let short_flag_matches = short_flags_payload["matches"]
-        .as_array()
-        .expect("short-flag matches should render as an array");
-    assert!(
-        short_flag_matches
+    for stub in ["-", "--"] {
+        let mut flags = fixture.osp();
+        flags.args([
+            "repl",
+            "debug-complete",
+            "--line",
+            &format!("ldap user {stub}"),
+        ]);
+        let output = flags.assert().success().get_output().clone();
+        let payload = parse_json_stdout(&output.stdout);
+        let labels = payload["matches"]
+            .as_array()
+            .expect("flag matches should render as an array")
             .iter()
-            .any(|item| item["id"] == "--attributes" && item["label"] == "--attributes, -a")
-    );
+            .map(|item| item["label"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(labels, ["--attributes, -a", "--filter"]);
+    }
 }
 
 #[cfg(unix)]

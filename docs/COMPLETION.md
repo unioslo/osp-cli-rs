@@ -177,6 +177,11 @@ CLI, such as:
 - `--quiet`
 - `--debug`
 
+With only `-` or `--` typed, the menu offers the command's own flags. If none
+are available, it offers invocation flags instead. Type a longer prefix, such
+as `--j` or `--for`, to include matching invocation flags. All flags remain
+recognized for highlighting and validation.
+
 Parsing also accepts short forms like `-v/-q/-d`, but completion suggestions
 use the long names.
 

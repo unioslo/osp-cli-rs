@@ -351,7 +351,8 @@ fn apply_shell_root_controls(root: &mut CompletionNode) {
 }
 
 fn inject_invocation_flags(node: &mut CompletionNode) {
-    for (name, flag) in invocation_flag_nodes() {
+    for (name, mut flag) in invocation_flag_nodes() {
+        flag.global = true;
         node.flags.entry(name).or_insert(flag);
     }
 
