@@ -987,7 +987,8 @@ pub trait NativeCommand: Send + Sync {
     /// Projects the command grammar and cached metadata into completion nodes.
     ///
     /// Override this when cached suggestions are also needed in noninteractive
-    /// catalogs. Interactive-only enrichment belongs in `augment_completion`.
+    /// catalogs. The registry fills missing flags from the dispatch grammar.
+    /// Interactive-only enrichment belongs in `augment_completion`.
     fn completion(&self) -> CompletionNode {
         CompletionNode::from_clap(&self.command())
     }
@@ -1290,6 +1291,7 @@ impl NativeCommandRegistry {
                 let mut describe = command.describe();
                 describe.inherit_auth_from_parents();
                 let mut completion = command.completion();
+                complete_grammar_flags(&mut completion, CompletionNode::from_clap(&grammar));
                 if augment_completion {
                     command.augment_completion(&mut completion);
                     attach_word_resolvers(&mut completion, &grammar, command, &[]);
@@ -1321,6 +1323,18 @@ impl NativeCommandRegistry {
             collect_command_auth(&mut registry, &describe, &[]);
         }
         registry
+    }
+}
+
+// Cached completion overrides may omit flags supplied automatically by clap.
+fn complete_grammar_flags(node: &mut CompletionNode, grammar: CompletionNode) {
+    for (name, flag) in grammar.flags {
+        node.flags.entry(name).or_insert(flag);
+    }
+    for (name, child) in grammar.children {
+        if let Some(node) = node.children.get_mut(&name) {
+            complete_grammar_flags(node, child);
+        }
     }
 }
 

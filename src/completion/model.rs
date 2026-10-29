@@ -502,6 +502,8 @@ impl ValueCatalog {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct FlagNode {
+    /// Recognize this flag without suggesting its name in menus.
+    pub hidden: bool,
     /// Large shared catalogues searched in order; a later one is used only
     /// when earlier ones have no match (e.g. your VMs, then every VM).
     pub catalogs: Vec<ValueCatalog>,

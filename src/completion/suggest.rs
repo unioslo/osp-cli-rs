@@ -279,7 +279,7 @@ impl SuggestionEngine {
         };
         node.flags
             .iter()
-            .filter(|(flag, meta)| !is_hidden_alias(flag, meta))
+            .filter(|(flag, meta)| !meta.hidden && !is_hidden_alias(flag, meta))
             .filter_map(|(flag, meta)| {
                 let score = self.match_score(&stub_lc, flag)?;
                 let score = if matches!(stub, "-" | "--") {
