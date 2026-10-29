@@ -465,7 +465,7 @@ pub(crate) fn run_cli_command(
     }
     emit_messages_for_ui(config, ui, &messages, ui.verbosity, sink);
     if let Some(report) = &result.failure_report {
-        let choices = super::host::report_hint_commands(report, ui.verbosity)
+        let choices = super::host::report_hint_commands(report, ui.verbosity, None)
             .as_ref()
             .map_or(0, Vec::len);
         let hint_action = if matches!(
@@ -952,11 +952,13 @@ pub(crate) fn render_repl_command(
     if let Some(recording) = crate::repl::recording::current() {
         recording.observe(&result.body.json_value());
     }
-    if let Some(hints) = result
-        .failure_report
-        .as_ref()
-        .and_then(|report| super::host::report_hint_commands(report, ui.verbosity))
-    {
+    if let Some(hints) = result.failure_report.as_ref().and_then(|report| {
+        super::host::report_hint_commands(
+            report,
+            ui.verbosity,
+            Some((line, &ui.render_settings.runtime.command_scope)),
+        )
+    }) {
         session.repl_feedback.remember_hints(hints);
     }
 
