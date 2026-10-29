@@ -1052,6 +1052,7 @@ fn known_error_hint(
 pub(crate) fn report_hint_commands(
     err: &miette::Report,
     verbosity: crate::core::MessageLevel,
+    input: Option<(&str, &crate::core::CommandScope)>,
 ) -> Option<Vec<String>> {
     if let Some(hint) = find_error_in_chain::<crate::core::CommandHint>(err) {
         return Some(vec![hint.command.clone()]);
@@ -1071,7 +1072,14 @@ pub(crate) fn report_hint_commands(
         && !context.command_corrections.is_empty()
     {
         return Some(if context.command_corrections.len() <= 3 {
-            context.command_corrections.clone()
+            context
+                .command_corrections
+                .iter()
+                .filter_map(|command| match input {
+                    Some((line, scope)) => corrected_input(line, command, scope),
+                    None => Some(command.clone()),
+                })
+                .collect()
         } else {
             Vec::new()
         });
@@ -1101,6 +1109,59 @@ pub(crate) fn report_hint_commands(
         .and_then(|context| context.command_path.as_deref())
         .unwrap_or("");
     Some(vec![format!("{path} --help").trim_start().to_string()])
+}
+
+/// Splice the correction into the submitted text, retaining its quoting and pipeline.
+fn corrected_input(line: &str, command: &str, scope: &crate::core::CommandScope) -> Option<String> {
+    let scoped = scope.command(command);
+    let corrected = shell_words::split(&scoped).ok()?;
+    use crate::core::shell_words::{LexEventKind, scan_shell};
+    let mut spans = Vec::new();
+    let mut start = None;
+    let mut command_end = line.len();
+    scan_shell(line, |event| {
+        if event.index >= command_end {
+            return;
+        }
+        match event.kind {
+            LexEventKind::Separator | LexEventKind::Pipe => {
+                if let Some(start) = start.take() {
+                    spans.push(start..event.index);
+                }
+                if event.kind == LexEventKind::Pipe {
+                    command_end = event.index;
+                }
+            }
+            _ => {
+                start.get_or_insert(event.index);
+            }
+        }
+    });
+    if let Some(start) = start {
+        spans.push(start..command_end);
+    }
+    let words = shell_words::split(&line[..command_end]).ok()?;
+    if words.len() != corrected.len() {
+        return None;
+    }
+    let mut replacements = words
+        .iter()
+        .zip(&corrected)
+        .enumerate()
+        .filter(|(_, (original, word))| original != word);
+    let (index, (_, word)) = replacements.next()?;
+    // Clap corrects one subcommand. A different token layout (for example an
+    // expanded alias) cannot safely be mapped back to the submitted text.
+    if replacements.next().is_some() {
+        return None;
+    }
+    let mut input = line.to_string();
+    input.replace_range(
+        spans.get(index)?.clone(),
+        &crate::core::shell_words::escape_for_shell(word),
+    );
+    let prefix = command.strip_suffix(&scoped)?;
+    Some(format!("{prefix}{input}"))
 }
 
 fn terse_clap_error(error: &clap::Error) -> String {

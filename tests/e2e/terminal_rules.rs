@@ -322,7 +322,7 @@ fn recovery_key_inserts_editable_scoped_command() {
     session.write_bytes(b"\r");
     assert!(session.wait_for_plain_output_since(mark, "default [orch]>", HANG_TIMEOUT));
     assert!(session.wait_for_editor_since(mark, HANG_TIMEOUT));
-    session.type_text("hots info 'team x' --detail");
+    session.type_text("hots info 'team x' --detail | C");
     let mark = session.output_len();
     session.write_bytes(b"\r");
     assert!(session.wait_for_plain_output_since(mark, "Alt+Enter", HANG_TIMEOUT));
@@ -340,7 +340,7 @@ fn recovery_key_inserts_editable_scoped_command() {
     for expected in ["hosts", "host", "hosts"] {
         let mark = session.output_len();
         session.write_bytes(b"\x1b\r");
-        let command = format!("{expected} info team\\ x --detail");
+        let command = format!("{expected} info 'team x' --detail | C");
         assert!(
             session.wait_for_plain_output_since(mark, &command, HANG_TIMEOUT),
             "{}",
@@ -368,13 +368,13 @@ fn recovery_key_inserts_editable_scoped_command() {
     session.write_bytes(b"\x1b\r");
     assert!(session.wait_for_plain_output_since(
         mark,
-        "hosts info team\\ x --detail",
+        "hosts info 'team x' --detail | C",
         HANG_TIMEOUT
     ));
     assert!(session.wait_for_editor_since(mark, HANG_TIMEOUT));
     let mark = session.output_len();
     session.write_bytes(b"\r");
-    assert!(session.wait_for_plain_output_since(mark, "EXECUTED-MARKER", HANG_TIMEOUT));
+    assert!(session.wait_for_plain_output_since(mark, "count", HANG_TIMEOUT));
     assert!(session.wait_for_editor_since(mark, HANG_TIMEOUT));
     assert_eq!(
         std::fs::read_to_string(native.join("executed")).unwrap(),

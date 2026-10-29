@@ -444,7 +444,11 @@ fn execute_repl_line_inner(
             }
             let evidence = crate::app::host::report_evidence(&err, ui.verbosity);
             crate::app::sink::write_diagnostics(sink, &evidence.0, &ui.render_settings);
-            let hints = crate::app::host::report_hint_commands(&err, ui.verbosity);
+            let hints = crate::app::host::report_hint_commands(
+                &err,
+                ui.verbosity,
+                Some((&resolved, &ui.render_settings.runtime.command_scope)),
+            );
             let hint_count = hints.as_ref().map_or(0, Vec::len);
             if let Some(hints) = hints {
                 state.session.repl_feedback.remember_hints(hints);
