@@ -265,6 +265,37 @@ The message is printed for root `exit`, `quit`, or end-of-input at any scope.
 Using `exit` or `quit` in a command shell returns to root with a
 `Leaving …` message instead.
 
+## Remembering command formats
+
+After a command with an explicit format, `remember` saves that format for its
+exact canonical command path in the active profile's `repl` terminal scope:
+
+```text
+mreg host info example --md
+remember
+mreg host info example
+forget
+```
+
+The saved default persists across REPL sessions; one-shots and scripts in the
+CLI terminal scope keep their defaults. Invocation flags, including
+`--format auto`, still win. Aliases, abbreviations and shell-relative commands
+share the canonical path, without positional arguments or parent inheritance.
+`last --md` followed by `remember` applies to the command that produced the
+saved result. A previous command without an explicit format changes nothing.
+
+`remember --list` renders the configured paths and formats. `forget` removes
+the previous command's winning saved default; `forget mreg host info` selects a
+named path, with command-path completion. These controls preserve the previous
+command/result. Use `config explain ui.command_formats.mreg.host.info` to
+inspect source and scope.
+
+A human TTY session offers one hint after the same command and explicit human
+format have been used twice. A persistent state flag makes this once per user
+across sessions and profiles. Failed commands, machine output, aliases,
+pipelines, scripts/source and replay do not contribute. The hint stays silent
+if its seen flag cannot be persisted.
+
 ## Config Writes Inside The REPL
 
 Inside the REPL, `config set` saves to the active profile unless

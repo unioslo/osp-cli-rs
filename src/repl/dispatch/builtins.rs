@@ -16,6 +16,8 @@ use super::shell::{handle_repl_exit_request, render_repl_help_for_scope};
 pub(super) enum ReplBuiltin {
     Help,
     HelpAll,
+    Remember(Option<crate::repl::command_formats::RememberCommand>),
+    Forget(Option<crate::repl::command_formats::ForgetCommand>),
     Recording(Option<crate::repl::recording::RecordingCommand>),
     Exit,
     Last,
@@ -65,6 +67,28 @@ pub(super) fn execute_repl_builtin(
     sink: &mut dyn UiSink,
 ) -> Result<ReplResult> {
     match builtin {
+        ReplBuiltin::Remember(command) => match command {
+            Some(command) => crate::repl::command_formats::remember(state, command, sink),
+            None => {
+                use clap::CommandFactory;
+                Ok(ReplResult::Print(
+                    crate::repl::command_formats::RememberCommand::command()
+                        .render_long_help()
+                        .to_string(),
+                ))
+            }
+        },
+        ReplBuiltin::Forget(command) => match command {
+            Some(command) => crate::repl::command_formats::forget(state, command),
+            None => {
+                use clap::CommandFactory;
+                Ok(ReplResult::Print(
+                    crate::repl::command_formats::ForgetCommand::command()
+                        .render_long_help()
+                        .to_string(),
+                ))
+            }
+        },
         ReplBuiltin::Recording(command) => {
             use clap::CommandFactory;
             Ok(ReplResult::Print(match command {
@@ -134,6 +158,31 @@ pub(super) fn parse_repl_builtin(raw: &str) -> Result<Option<ReplBuiltin>> {
         .find(|(name, _)| *name == raw)
     {
         return Ok(Some(ReplBuiltin::Pagination(*direction)));
+    }
+    if matches!(raw.split_whitespace().next(), Some("remember" | "forget")) {
+        use clap::Parser;
+        let words = shell_words::split(raw).map_err(|error| miette!("{error}"))?;
+        return if words[0] == "remember" {
+            let scanned = crate::cli::invocation::scan_command_tokens(&words)?;
+            match crate::repl::command_formats::RememberCommand::try_parse_from(scanned.tokens) {
+                Ok(mut command) => {
+                    command.invocation = scanned.invocation;
+                    Ok(Some(ReplBuiltin::Remember(Some(command))))
+                }
+                Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+                    Ok(Some(ReplBuiltin::Remember(None)))
+                }
+                Err(error) => Err(miette!("{error}")),
+            }
+        } else {
+            match crate::repl::command_formats::ForgetCommand::try_parse_from(words) {
+                Ok(command) => Ok(Some(ReplBuiltin::Forget(Some(command)))),
+                Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+                    Ok(Some(ReplBuiltin::Forget(None)))
+                }
+                Err(error) => Err(miette!("{error}")),
+            }
+        };
     }
     if raw.split_whitespace().next() == Some("last") {
         return Ok(Some(ReplBuiltin::Last));
@@ -544,6 +593,10 @@ fn execute_last_result_builtin(
         invocation.source,
         Some(sink),
     )?;
+    let path = last.output.command_path.clone();
+    session
+        .command_formats
+        .record(&path, scanned.invocation.format);
     session.last_output = Some((
         std::sync::Arc::new(staged),
         invocation.ui.render_settings.clone(),

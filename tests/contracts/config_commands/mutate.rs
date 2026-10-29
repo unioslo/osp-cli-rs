@@ -39,6 +39,39 @@ ui.mode = "plain"
     let payload = std::fs::read_to_string(home.join(".config").join("osp").join("config.toml"))
         .expect("config should be readable");
     assert!(!payload.contains("ui.mode"));
+
+    let run_repl = |input: &str| {
+        let mut command = crate::test_env::command(assert_cmd::cargo::cargo_bin!("osp"));
+        command.envs(crate::test_env::isolated_env(&home))
+            .env("PATH", "/usr/bin:/bin")
+            .write_stdin(input)
+            .assert().success().get_output().stdout.clone()
+    };
+    let first = run_repl("theme list --md\nremember\nremember --list --json\ntheme list\nlast --table\nremember\nexit\n");
+    let first = String::from_utf8(first).unwrap();
+    assert!(first.contains("theme list now defaults to md."), "{first}");
+    assert!(first.contains("theme list now defaults to table."), "{first}");
+    let start = first.find("[\n").expect("remember --list should render JSON");
+    let listed = serde_json::Deserializer::from_str(&first[start..])
+        .into_iter::<serde_json::Value>().next().unwrap().unwrap();
+    assert_eq!(listed, serde_json::json!([{"path": "theme list", "format": "md"}]));
+
+    let mut cli = crate::test_env::command(assert_cmd::cargo::cargo_bin!("osp"));
+    cli.envs(crate::test_env::isolated_env(&home))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["--json", "config", "get", "ui.command_formats.theme.list"])
+        .assert().failure();
+
+    let second = run_repl("config get ui.command_formats.theme.list --json\nforget theme list\nforget theme list\ntheme list\nremember\nexit\n");
+    let second = String::from_utf8(second).unwrap();
+    let start = second.find("[\n").expect("the saved key should persist into another REPL");
+    let persisted = serde_json::Deserializer::from_str(&second[start..])
+        .into_iter::<serde_json::Value>().next().unwrap().unwrap();
+    assert_eq!(first_json_row(&persisted, "persisted command format")["value"], "table");
+    assert!(second.contains("Forgot the format default for theme list."), "{second}");
+    assert!(second.contains("theme list has no saved format to forget."), "{second}");
+    assert!(second.contains("theme list has no format to remember;"), "{second}");
+
 }
 
 #[cfg(unix)]

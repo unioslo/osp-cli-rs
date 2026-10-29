@@ -1,6 +1,6 @@
 ---
 source: src/repl/dispatch/tests.rs
-assertion_line: 495
+assertion_line: 505
 expression: help
 ---
 Usage: [INVOCATION_OPTIONS] COMMAND [ARGS]...
@@ -17,6 +17,8 @@ config            Inspect and edit runtime config
 alias             Create and manage command aliases
 history           Inspect or prune REPL history
 context           Inspect or clear remembered session values
+remember          Save the previous command's explicit format as its REPL default
+forget            Remove a command's saved format default
 each              Run a command for every value of the saved result
 recording         Record commands, output and HTTP timing as private JSON Lines
 notifications     Preview local terminal feedback (no service requests)

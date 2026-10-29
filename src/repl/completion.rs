@@ -41,6 +41,10 @@ pub(crate) fn build_repl_completion_tree(
         .into_diagnostic()
         .wrap_err("failed to attach config completion keys")?;
 
+    let command_paths = command_path_children(&tree.root);
+    if let Some(forget) = tree.root.children.get_mut("forget") {
+        forget.children = command_paths;
+    }
     inject_invocation_flags(&mut tree.root);
     mark_context_only_flags(&mut tree.root);
 
@@ -90,6 +94,25 @@ pub(crate) fn build_repl_completion_tree(
         }
     }
     Ok(rooted)
+}
+
+fn command_path_children(root: &CompletionNode) -> BTreeMap<String, CompletionNode> {
+    root.children
+        .iter()
+        .filter(|(_, node)| !node.hidden && !node.value_key && !node.value_leaf)
+        .map(|(name, node)| {
+            (
+                name.clone(),
+                CompletionNode {
+                    name: node.name.clone(),
+                    tooltip: node.tooltip.clone(),
+                    children: command_path_children(node),
+                    word_resolver: node.word_resolver.clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]

@@ -229,6 +229,8 @@ fn execute_repl_line_inner(
     let mut stdio = StdIoUiSink;
     let sink = sink.unwrap_or(&mut stdio);
     let mut accepted = false;
+    let hint_format =
+        crate::repl::command_formats::hint_format(line, state.runtime.config.resolved());
     let started = Instant::now();
     let mut resolved = if line.trim_start().starts_with('|') {
         format!("last {}", line.trim_start())
@@ -374,6 +376,23 @@ fn execute_repl_line_inner(
             .take_completion_refresh_request();
     match execution {
         Ok(mut executed) => {
+            if executed.exit_code == 0
+                && let Some(format) = hint_format
+                && state
+                    .session
+                    .last_output
+                    .as_ref()
+                    .is_some_and(|(output, settings)| {
+                        !matches!(
+                            output.output_format(settings),
+                            crate::core::OutputFormat::Json
+                                | crate::core::OutputFormat::Csv
+                                | crate::core::OutputFormat::Tsv
+                        )
+                    })
+            {
+                state.session.command_formats.maybe_hint(format, sink);
+            }
             if refresh_completion {
                 executed.result = match executed.result {
                     ReplResult::Continue => ReplResult::Restart {
