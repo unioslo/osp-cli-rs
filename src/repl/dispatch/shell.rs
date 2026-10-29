@@ -90,7 +90,7 @@ pub(super) fn execute_repl_shortcut(
             command,
             invocation,
         } => {
-            let entered = enter_repl_shell(state, &command, &invocation, sink)?;
+            let entered = enter_repl_shell(state, &command, &invocation)?;
             Ok(ReplResult::Restart {
                 output: entered,
                 reload: ReplReloadKind::Completion,
@@ -202,14 +202,13 @@ pub(crate) fn leave_repl_shell(session: &mut AppSession) -> Option<String> {
 }
 
 fn render_repl_shell_leave_message(frame: &crate::app::ReplScopeFrame) -> String {
-    format!("Leaving {} shell. Back at root.\n", frame.command())
+    format!("Leaving {}. Back at root.\n", frame.command())
 }
 
 pub(super) fn enter_repl_shell(
     state: &mut crate::app::AppState,
     command: &str,
     invocation: &ResolvedInvocation,
-    sink: &mut dyn UiSink,
 ) -> Result<String> {
     let path = crate::core::command_policy::CommandPath::new([command]);
     before_external_run(
@@ -249,15 +248,12 @@ pub(super) fn enter_repl_shell(
         .scope
         .commands()
         .last()
-        .map(|current| format!("Leaving {current} shell. "))
+        .map(|current| format!("Leaving {current}. "))
         .unwrap_or_default();
     state.session.enter_repl_scope(command.to_string());
     out.push_str(&format!(
-        "Entering {command} shell. Type `exit` to leave.\n"
+        "Entering {command}. help lists commands, exit goes back, Ctrl-D quits.\n"
     ));
-    if let Ok(help) = render_repl_help_for_scope(state, invocation, "", &[], sink) {
-        out.push_str(&help);
-    }
     Ok(out)
 }
 
@@ -514,7 +510,7 @@ mod tests {
             ReplResult::Restart {
                 output: text,
                 reload: ReplReloadKind::Completion,
-            } if text.contains("Leaving ldap shell")
+            } if text.contains("Leaving ldap.")
         ));
     }
 
@@ -566,8 +562,7 @@ mod tests {
                 .expect_err("missing plugin should reject shell entry");
         assert!(err.to_string().contains("ldap"));
 
-        let mut sink = BufferedUiSink::default();
-        let err = enter_repl_shell(&mut state, "ldap", &invocation, &mut sink)
+        let err = enter_repl_shell(&mut state, "ldap", &invocation)
             .expect_err("direct shell entry should also fail");
         assert!(err.to_string().contains("ldap"));
     }
@@ -577,11 +572,13 @@ mod tests {
         let native = NativeCommandRegistry::new().with_command(NativeLdapHelpCommand);
         let mut state = app_state_with_native(native);
         let invocation = base_repl_invocation(&state.runtime);
-        let mut sink = BufferedUiSink::default();
 
-        let entered = enter_repl_shell(&mut state, "ldap", &invocation, &mut sink)
+        let entered = enter_repl_shell(&mut state, "ldap", &invocation)
             .expect("native ldap shell should enter");
-        assert!(entered.contains("Entering ldap shell"));
+        assert_eq!(
+            entered,
+            "Entering ldap. help lists commands, exit goes back, Ctrl-D quits.\n"
+        );
         assert!(state.session.scope.commands().last().is_some());
 
         let scoped_help =
@@ -609,7 +606,7 @@ mod tests {
             ReplResult::Restart {
                 output: text,
                 reload: ReplReloadKind::Completion,
-            } => assert!(text.contains("Entering ldap shell")),
+            } => assert!(text.contains("Entering ldap.")),
             other => panic!("unexpected repl result: {other:?}"),
         }
         assert!(!state.session.scope.is_root());
@@ -659,7 +656,7 @@ mod tests {
             ReplResult::Restart {
                 output: text,
                 reload: ReplReloadKind::Completion,
-            } => assert!(text.contains("Entering ldap shell")),
+            } => assert!(text.contains("Entering ldap.")),
             other => panic!("unexpected repl result: {other:?}"),
         }
         assert_eq!(state.session.scope.commands(), &["ldap".to_string()]);

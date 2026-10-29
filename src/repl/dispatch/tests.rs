@@ -138,7 +138,7 @@ fn repl_exit_behaves_differently_for_root_and_shells_unit() {
         ReplResult::Restart {
             output: message,
             reload: ReplReloadKind::Completion,
-        } if message == "Leaving ldap shell. Back at root.\n"
+        } if message == "Leaving ldap. Back at root.\n"
     ));
     assert!(nested.scope.is_root());
 }

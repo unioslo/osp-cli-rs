@@ -175,7 +175,9 @@ exit
 ```
 
 Typing the bare root enters that shell and makes later lines inherit the root
-until you leave it.
+until you leave it. Entry prints one line explaining `help`, `exit`, and
+Ctrl-D; use `help` to list the scoped commands. Ctrl-D on an empty input line
+exits OSP from root or a shell.
 
 Inside an active shell, repeating the current root shows help for that shell:
 
@@ -254,8 +256,9 @@ product or profile wants a sign-off:
 config set repl.exit_message 'So long, and thanks for all the fish!'
 ```
 
-The message is printed for root `exit`, `quit`, or end-of-input. Leaving a
-command shell keeps its existing `Leaving … shell` message instead.
+The message is printed for root `exit`, `quit`, or end-of-input at any scope.
+Using `exit` or `quit` in a command shell returns to root with a
+`Leaving …` message instead.
 
 ## Config Writes Inside The REPL
 
