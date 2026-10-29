@@ -353,9 +353,25 @@ pub(crate) fn run_scanned_with_sink_and_app(
         Ok(mut cli) => {
             if let Some(Commands::External(tokens)) = cli.command.as_mut() {
                 tokens.extend(suffix);
-                run(cli, scanned.invocation.clone(), &[], sink, app, timing)
+                run(
+                    cli,
+                    scanned.invocation.clone(),
+                    &[],
+                    &resolved_command_path(&help_command, &scanned.argv),
+                    sink,
+                    app,
+                    timing,
+                )
             } else {
-                run(cli, scanned.invocation.clone(), &stages, sink, app, timing)
+                run(
+                    cli,
+                    scanned.invocation.clone(),
+                    &stages,
+                    &resolved_command_path(&help_command, &scanned.argv),
+                    sink,
+                    app,
+                    timing,
+                )
             }
         }
         Err(err) => handle_clap_parse_error(scanned, &help_command, err, &stages, sink, app),
@@ -546,6 +562,7 @@ fn run(
     mut cli: Cli,
     invocation: InvocationOptions,
     stages: &[String],
+    command_path: &[String],
     sink: &mut dyn UiSink,
     app: &std::sync::Arc<super::AppDefinition>,
     timing: &mut TimingSummary,
@@ -568,6 +585,9 @@ fn run(
     ) {
         sink.write_stdout(&help);
         return Ok(0);
+    }
+    if matches!(dispatch.action, RunAction::Builtin(_)) {
+        invocation_ui.ui.render_settings.command_path = command_path.to_vec();
     }
     if !stages.is_empty()
         && matches!(

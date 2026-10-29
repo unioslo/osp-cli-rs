@@ -100,7 +100,8 @@ impl<'a> BuiltinExecutor<'a> {
         command: Commands,
     ) -> Result<Option<CommandOutput>> {
         command.validate_dispatch_surface(matches!(surface, BuiltinSurface::Repl { .. }))?;
-        match command {
+        let command_path = surface.ui().render_settings.command_path.clone();
+        let result = match command {
             Commands::Plugins(args) => {
                 plugins_cmd::run_plugins_command(self.runtime, self.clients, args).map(Some)
             }
@@ -127,7 +128,7 @@ impl<'a> BuiltinExecutor<'a> {
             Commands::Notifications(_) => {
                 crate::repl::notices::request_foreground_bell(
                     self.runtime.config.resolved(),
-                    surface.ui().render_settings.format,
+                    surface.ui().render_settings.requested_format(),
                 );
                 Ok(Some(CommandOutput::exit(0)))
             }
@@ -139,7 +140,11 @@ impl<'a> BuiltinExecutor<'a> {
             Commands::Intro(args) => self.run_intro_command(surface, args).map(Some),
             Commands::Repl(args) => self.run_repl_debug_command(surface, args).map(Some),
             Commands::External(_) => Ok(None),
-        }
+        }?;
+        Ok(result.map(|mut output| {
+            output.command_path = command_path;
+            output
+        }))
     }
 
     fn run_history_command(

@@ -244,9 +244,9 @@ when an alias runs. Positional placeholders such as `${1}` and `${@}` remain
 unresolved until invocation.
 
 Aliases follow config scope and storage rules. Without a configured
-`config.default-target` or explicit scope/store flags, a one-shot CLI write
-persists, while a REPL write lasts for the current session. `--permanent`
-requests persistence; `--profile`, `--global`, and `--terminal` select the same
+`config.default-target` or explicit scope/store flags, both one-shot and REPL
+writes persist to the active profile. `--session` requests a temporary change;
+`--permanent` forces persistence; `--profile`, `--global`, and `--terminal` select the same
 scopes as `config set` and `config unset`.
 
 The root REPL is silent on exit by default. Set `repl.exit_message` when a

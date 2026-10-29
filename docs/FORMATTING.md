@@ -83,7 +83,8 @@ Format guide:
 - `auto`
   - let `osp` choose from the result shape
 
-Explicit invocation formats win, followed by configured `ui.format`. One
+Explicit invocation formats (including `--format auto`) win, followed by an
+exact `ui.command_formats.<canonical.command.path>` default, then `ui.format`. One
 ordinary record then selects a classic MREG card before human command/plugin
 recommendations; remaining shape inference comes last. Machine recommendations
 retain their export format. Help/intro documents keep guide layout by default unless

@@ -232,6 +232,10 @@ pub struct RenderSettings {
     /// Execution policy used to expose usable command prefixes in help.
     pub command_prefixes: crate::command_words::CommandPrefixes,
     pub format: OutputFormat,
+    /// Canonical invocation path, without positional arguments.
+    pub(crate) command_path: Vec<String>,
+    /// Exact defaults from the resolved config snapshot; selection stays local.
+    pub(crate) command_formats: std::collections::BTreeMap<String, OutputFormat>,
     pub format_explicit: bool,
     /// Render semantic documents as guides unless an explicit format is selected.
     pub guide_default_format: bool,
@@ -272,6 +276,8 @@ impl Default for RenderSettings {
         Self {
             command_prefixes: Default::default(),
             format: OutputFormat::Auto,
+            command_path: Vec::new(),
+            command_formats: Default::default(),
             format_explicit: false,
             guide_default_format: true,
             table_hints: true,
@@ -433,6 +439,16 @@ pub(crate) fn apply_render_config_overrides(
     {
         settings.format = parsed;
     }
+
+    settings.command_formats = config
+        .values()
+        .keys()
+        .filter_map(|key| {
+            let path = key.strip_prefix("ui.command_formats.")?;
+            let format = config.get_string(key).and_then(OutputFormat::parse)?;
+            Some((path.to_owned(), format))
+        })
+        .collect();
 
     settings.table_hints = config
         .get_string("ui.help.level")
@@ -788,24 +804,43 @@ impl RenderSettings {
         settings_for_target(self, RenderTarget::Clipboard)
     }
 
+    /// Selects invocation/config preference before result-shape inference.
+    /// The second value distinguishes an exact command default for documents.
+    fn format_preference(&self) -> (OutputFormat, bool) {
+        if !self.format_explicit
+            && let Some(format) = self.command_formats.get(&self.command_path.join("."))
+        {
+            return (*format, true);
+        }
+        (self.format, false)
+    }
+
+    /// Shared preference for output-policy checks that happen before rendering.
+    pub(crate) fn requested_format(&self) -> OutputFormat {
+        self.format_preference().0
+    }
+
     pub(crate) fn resolve_output_format(
         &self,
         output: &OutputResult,
     ) -> (OutputFormat, FormatProvenance) {
         use FormatProvenance::{Configured, Explicit, Inferred, Recommended};
-        if self.format_explicit && self.format != OutputFormat::Auto {
-            return (self.format, Explicit);
+        let (format, command_default) = self.format_preference();
+        if self.format_explicit && format != OutputFormat::Auto {
+            return (format, Explicit);
         }
         // Documents keep their layout unless an invocation requests a format.
         if output.meta.document_rows {
-            return if self.guide_default_format || self.format == OutputFormat::Auto {
+            return if (self.guide_default_format && !command_default)
+                || format == OutputFormat::Auto
+            {
                 (OutputFormat::Auto, Inferred)
             } else {
-                (self.format, Configured)
+                (format, Configured)
             };
         }
-        if self.format != OutputFormat::Auto {
-            return (self.format, Configured);
+        if format != OutputFormat::Auto {
+            return (format, Configured);
         }
         let inferred = match &output.items {
             OutputItems::Groups(_) => OutputFormat::Table,

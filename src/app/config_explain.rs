@@ -47,7 +47,7 @@ pub(crate) fn config_explain_result(
         });
     }
 
-    if matches!(ui.render_settings.format, OutputFormat::Json) {
+    if matches!(ui.render_settings.requested_format(), OutputFormat::Json) {
         let payload = config_explain_json(&explain, config, args.show_secrets);
         return Ok(CommandOutput::json(payload));
     }

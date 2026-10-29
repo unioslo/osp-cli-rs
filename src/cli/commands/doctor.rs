@@ -127,7 +127,7 @@ fn run_doctor_all(
             status,
         )
     });
-    if matches!(ui.render_settings.format, OutputFormat::Json) {
+    if matches!(ui.render_settings.requested_format(), OutputFormat::Json) {
         let mut report = doctor_report_json_value(&sections);
         if let Some((path, status)) = &cache {
             report["cache"] = serde_json::json!({"path": path, "status": status});
@@ -302,7 +302,7 @@ fn render_last_failure_document(
     last_failure: Option<&LastFailure>,
 ) -> crate::app::CommandOutput {
     let Some(last) = last_failure else {
-        if matches!(ui.render_settings.format, OutputFormat::Json) {
+        if matches!(ui.render_settings.requested_format(), OutputFormat::Json) {
             return CommandOutput::json(serde_json::json!({
                 "status": "ok",
                 "failure": null,
@@ -313,7 +313,7 @@ fn render_last_failure_document(
     };
 
     let (summary, action) = split_failure_action(&last.summary);
-    if matches!(ui.render_settings.format, OutputFormat::Json) {
+    if matches!(ui.render_settings.requested_format(), OutputFormat::Json) {
         let payload = serde_json::json!({
             "status": "error",
             "command": last.command_line,

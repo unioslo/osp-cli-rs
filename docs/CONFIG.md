@@ -96,6 +96,21 @@ explicit profiles and unknown environment-selected defaults fail with
 `UnknownProfile` during configuration resolution, before command/network work.
 They never silently fall back to another environment.
 
+## Per-command output formats
+
+`ui.command_formats.<command.path>` sets the format for one exact canonical
+command path, for example `ui.command_formats.mreg.host.info = "md"`.
+Command words are joined with dots after aliases, abbreviations and REPL shell
+scope resolve; positional arguments are excluded. Paths contain nonempty
+letters/digits/underscore/hyphen segments. Wildcards and parent inheritance
+are unsupported. Values use the same enum as `ui.format`.
+
+Explicit invocation flags (including `--format auto`) win over a command
+format, then `ui.format`, then automatic selection. Command formats use the
+ordinary profile, terminal and session scopes, persistence and unset behavior.
+`config explain ui.command_formats.mreg.host.info` shows the winning store,
+scope and value. Invocation settings never alter the following REPL command.
+
 ## Scoping Rules (Profile + Terminal)
 
 Within a single loader, the resolver picks the most specific match using this

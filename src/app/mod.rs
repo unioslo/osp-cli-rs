@@ -599,7 +599,7 @@ impl App {
                 let evidence = host::report_evidence(&err, verbosity);
                 sink::write_diagnostics(sink, &evidence.0, &error_render_settings);
                 let rendered = render_process_error(&err, &error_render_settings, verbosity, None);
-                if error_render_settings.format == OutputFormat::Json {
+                if error_render_settings.requested_format() == OutputFormat::Json {
                     sink.write_stdout(&rendered);
                     if debug_level >= 2 {
                         sink.write_stderr(&format!(
@@ -685,7 +685,7 @@ pub(crate) fn render_process_error(
 ) -> String {
     let _ = verbosity;
     let message = render_report_message(err, MessageLevel::Success, settings);
-    if settings.format == OutputFormat::Json {
+    if settings.requested_format() == OutputFormat::Json {
         let exit_code = classify_exit_code(err);
         let code = match exit_code {
             host::EXIT_CODE_USAGE => "usage_error",

@@ -563,6 +563,7 @@ pub(crate) struct ConfigSchema {
 enum DynamicSchemaKeyKind {
     UserDisplayName,
     ReplBinding,
+    CommandFormat,
 }
 
 impl Default for ConfigSchema {
@@ -2014,6 +2015,15 @@ fn adapt_dynamic_value_for_schema(
     kind: DynamicSchemaKeyKind,
 ) -> Result<ConfigValue, ConfigError> {
     let adapted = match kind {
+        DynamicSchemaKeyKind::CommandFormat => adapt_value_for_schema(
+            key,
+            value,
+            &SchemaEntry::string().with_allowed_values(
+                crate::core::OutputFormat::ALL
+                    .iter()
+                    .map(|format| format.as_str()),
+            ),
+        )?,
         DynamicSchemaKeyKind::UserDisplayName | DynamicSchemaKeyKind::ReplBinding => {
             adapt_value_for_schema(key, value, &SchemaEntry::string())?
         }
@@ -2071,6 +2081,17 @@ fn dynamic_schema_key_kind(key: &str) -> Option<DynamicSchemaKeyKind> {
     let normalized = normalize_identifier(key);
     if let Some(action) = normalized.strip_prefix("repl.bindings.") {
         return (!action.is_empty()).then_some(DynamicSchemaKeyKind::ReplBinding);
+    }
+    if let Some(path) = normalized.strip_prefix("ui.command_formats.") {
+        return path
+            .split('.')
+            .all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+            })
+            .then_some(DynamicSchemaKeyKind::CommandFormat);
     }
     // `user.display_names.<user>`: the name shown for one `-u` user.
     if let Some(user) = normalized.strip_prefix("user.display_names.") {

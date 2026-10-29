@@ -65,7 +65,7 @@ pub(super) fn parse_repl_invocation(
         let prefixed = session.scope.prefixed_tokens(command_tokens);
         scanned.tokens.splice(prefix_len.., prefixed);
     }
-    let effective =
+    let mut effective =
         app::resolve_invocation_ui(runtime.config.resolved(), &runtime.ui, &scanned.invocation);
     let command_index = prefix_len + if scoped { scope.len() } else { 0 };
     // `help` is a REPL alias layered on top of shell scope. Handle it before
@@ -97,6 +97,10 @@ pub(super) fn parse_repl_invocation(
     // clap parsing so the rest of dispatch only has to reason about one shape.
     let scoped_tokens = input::rewrite_help_alias_tokens_at(&scanned.tokens, command_index)
         .unwrap_or_else(|| scanned.tokens.clone());
+    let prefixes =
+        crate::command_words::CommandPrefixes::from_config(runtime.config.resolved()).enabled(true);
+    let path = app::command_plan::canonical_builtin_path(prefixes, &scoped_tokens)?;
+    effective.ui.render_settings.command_path = path;
     let command = match app::command_plan::parse_inline_command(
         &scoped_tokens,
         app::command_plan::CommandSurface::Repl,

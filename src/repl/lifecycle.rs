@@ -176,7 +176,7 @@ pub(crate) fn resolved_product_actions(
 ) -> Result<Vec<crate::repl::ReplAction>> {
     let mut actions = Vec::new();
     use std::io::IsTerminal;
-    if runtime.ui.render_settings.format == crate::core::output::OutputFormat::Json
+    if runtime.ui.render_settings.requested_format() == crate::core::output::OutputFormat::Json
         || repl_input_mode(runtime.config.resolved()) == crate::repl::ReplInputMode::Basic
         || !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
     {
@@ -240,7 +240,8 @@ fn build_repl_cycle_run_config(
     let view = ReplViewContext::from_parts(runtime, session);
 
     let product_status =
-        if runtime.ui.render_settings.format == crate::core::output::OutputFormat::Json {
+        if runtime.ui.render_settings.requested_format() == crate::core::output::OutputFormat::Json
+        {
             None
         } else {
             let commands = crate::app::runtime::visible_native_commands(&runtime.auth, clients)
@@ -270,7 +271,7 @@ fn build_repl_cycle_run_config(
     .build();
     config.exit_on_interrupt = runtime.definition.repl_line_handler.is_some();
     config.actions = actions;
-    if runtime.ui.render_settings.format != crate::core::output::OutputFormat::Json {
+    if runtime.ui.render_settings.requested_format() != crate::core::output::OutputFormat::Json {
         let commands = crate::app::runtime::visible_native_commands(&runtime.auth, clients)
             .map(|(_, command)| command.clone())
             .collect::<Vec<_>>();

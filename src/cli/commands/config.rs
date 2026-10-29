@@ -756,7 +756,7 @@ fn run_config_set(
             .wrap_err_with(|| format!("failed to explain config for key `{key}` after set"))?;
         let config = resolve_runtime_config(request)
             .wrap_err_with(|| format!("failed to resolve config for key `{key}` after set"))?;
-        if matches!(ui.render_settings.format, OutputFormat::Json) {
+        if matches!(ui.render_settings.requested_format(), OutputFormat::Json) {
             let payload = config_explain_json(&explain, &config, false);
             CommandOutput::json(payload)
         } else {

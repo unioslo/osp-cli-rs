@@ -455,7 +455,7 @@ fn execute_repl_line_inner(
             }
             let hint_action = crate::repl::lifecycle::hint_action(
                 state.runtime.config.resolved(),
-                ui.render_settings.format,
+                ui.render_settings.requested_format(),
                 hint_count,
             );
             let rendered = crate::app::render_process_error(
@@ -464,7 +464,7 @@ fn execute_repl_line_inner(
                 ui.verbosity,
                 hint_action.as_deref(),
             );
-            if ui.render_settings.format == crate::core::output::OutputFormat::Json {
+            if ui.render_settings.requested_format() == crate::core::output::OutputFormat::Json {
                 sink.write_stdout(&rendered);
                 if ui.debug_level >= 2 {
                     sink.write_stderr(&format!(

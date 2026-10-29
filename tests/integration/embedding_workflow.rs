@@ -100,7 +100,11 @@ fn embedded_access_hook_reads_live_facts_and_prepares_each_execution_once() {
         ttl_seconds: None,
     }));
     let paths = Arc::new(Mutex::new(Vec::new()));
+    let mut defaults = ConfigLayer::default();
+    defaults.set("ui.format", "table");
+    defaults.set("ui.command_formats.credential-probe.read", "json");
     let app = App::new()
+        .with_product_defaults(defaults)
         .with_native_commands(NativeCommandRegistry::new().with_command(CredentialProbe::default()))
         .with_access_policy(ProductAccess {
             credential: credential.clone(),
@@ -109,13 +113,7 @@ fn embedded_access_hook_reads_live_facts_and_prepares_each_execution_once() {
     let mut sink = BufferedUiSink::default();
     assert_eq!(
         app.run_with_sink(
-            [
-                "osp",
-                "--defaults-only",
-                "--json",
-                "credential-probe",
-                "get"
-            ],
+            ["osp", "--defaults-only", "credential-probe", "get"],
             &mut sink
         )
         .unwrap(),
