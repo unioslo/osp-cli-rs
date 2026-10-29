@@ -254,7 +254,10 @@ timestamp with `Z` or a numeric offset. Natural-language values such as
 
 ## Scoped History
 
-`repl.history.path` controls identity/profile isolation. Default filenames
+`repl.history.path` controls identity/profile isolation. An empty path keeps
+history in memory only: it starts empty and never reads or changes a history
+file. `--incognito` selects this behavior while retaining session recall, search,
+bang expansion and the incognito prompt indicator. Default filenames
 lowercase the identity and keep ordinary and drift accounts separate. Use a path
 without `${profile.active}` to share history across profiles.
 `repl.history.profile_scoped` is retired.

@@ -100,7 +100,7 @@ pub(crate) fn build_history_config(runtime: &AppRuntime, session: &AppSession) -
         }
     }
     HistoryConfig {
-        path: Some(path),
+        path: (!path.as_os_str().is_empty()).then_some(path),
         legacy_path,
         max_entries: config_usize(
             config,

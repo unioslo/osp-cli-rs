@@ -658,7 +658,9 @@ pub(crate) fn build_repl_prompt_right_renderer(
     product: Option<super::product::ReplStatusRenderer>,
 ) -> crate::repl::PromptRightRenderer {
     let resolved = view.ui.render_settings.resolve_render_settings();
-    let history_enabled = history::repl_history_enabled(view.config) && view.history_enabled;
+    let history_enabled = history::repl_history_enabled(view.config)
+        && view.history_enabled
+        && view.config.get_string("repl.history.path") != Some("");
     let native_context = view.native_context.clone();
     let left_width = crate::ui::display_width(&build_repl_prompt(view).left);
     Arc::new(move || {

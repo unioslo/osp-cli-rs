@@ -825,7 +825,7 @@ impl Cli {
         }
         layer.extend_from_layer(&self.product_overrides);
         if self.incognito {
-            layer.set("repl.history.enabled", false);
+            layer.set("repl.history.path", "");
         }
         append_appearance_overrides(
             layer,
