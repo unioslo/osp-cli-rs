@@ -104,7 +104,7 @@ fn top_level_help_supports_all_explicit_output_formats_contract() {
     let markdown = run_cli_stdout(&["--no-env", "--no-config-file", "--md", "--help"]);
     assert!(markdown.contains("## Usage"));
     assert!(markdown.contains("## Commands"));
-    assert!(markdown.contains("- `help` "));
+    assert!(markdown.contains("- `config` "));
     assert!(!markdown.contains("| name"));
 
     let table = run_cli_stdout(&["--no-env", "--no-config-file", "--table", "--help"]);

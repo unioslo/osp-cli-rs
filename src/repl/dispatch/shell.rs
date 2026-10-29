@@ -328,7 +328,42 @@ fn repl_help_command_result_for_scope(
     }
 
     let tokens = state.session.scope.help_tokens();
-    run_repl_external_command(state, tokens, invocation)
+    let mut result = run_repl_external_command(state, tokens, invocation)?;
+    if let crate::app::command_output::CommandBody::Output(output) = &mut result.body
+        && let Some(crate::core::output_model::OutputDocument::Semantic(document)) =
+            &output.document
+    {
+        use crate::core::document::{DocBlock, HelpLevel, SectionRole};
+        let prepared =
+            lifecycle::prepare_repl_surface_state(&state.runtime, &state.session, &state.clients)?;
+        let builtins = super::builtins::command_names();
+        let names = prepared
+            .surface
+            .overview_entries
+            .iter()
+            .filter(|entry| {
+                builtins.contains(&entry.name)
+                    || input::REPL_GLOBAL_COMMANDS.contains(&entry.name.as_str())
+            })
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        let mut document = document.clone();
+        document.blocks.push(DocBlock::Section {
+            role: SectionRole::Content,
+            title: "Everywhere".to_string(),
+            level: HelpLevel::Normal,
+            blocks: vec![DocBlock::Paragraph {
+                text: names.join("  "),
+            }],
+        });
+        **output =
+            output
+                .clone()
+                .with_document(crate::core::output_model::OutputDocument::Semantic(
+                    document,
+                ));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

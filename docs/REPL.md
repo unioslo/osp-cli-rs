@@ -154,7 +154,7 @@ arrive later. Selections remain scoped to the active identity and profile.
 
 Suggested commands match the current prompt. Inside `orch`, both `task …` and
 `orch task …` work unless a host command or alias shadows the relative first
-word: use `orch help task` to distinguish it from the host's `help` command.
+word. `help task` resolves in the current scope just like `task …`.
 Suggestions for another root keep their root form; leave the current shell
 before running them. JSON follow-ups in the REPL use the same form, while
 one-shot output uses `osp …`.
@@ -192,8 +192,13 @@ Shells do not nest. Typing another shell's root switches to it: inside `orch`,
 `nh` leaves the `orch` shell and enters the `nh` shell, and `exit` returns to
 root.
 
-Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned. They
-manage the shell rather than dispatching a normal command.
+Inside a shell, `help` and `--help` show that scope's command help, followed
+by an Everywhere section naming the canonical global REPL commands in root
+help order. `help --all` lists the full OSP command inventory from any scope.
+`help COMMAND` resolves
+relative to the current scope first, just like ordinary command execution.
+
+Shell controls such as `exit`, `quit`, and bare `help` stay REPL-owned.
 
 Host commands such as `doctor last -v`, `config`, and `history` keep their root
 meaning inside integration shells. Scoped completion includes the same global
