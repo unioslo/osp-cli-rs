@@ -87,6 +87,16 @@ fn top_level_help_supports_all_explicit_output_formats_contract() {
         .unwrap();
     assert!(!usage["blocks"][0]["text"].as_str().unwrap().is_empty());
 
+    for args in [
+        &["--defaults-only", "--help", "|", "config"][..],
+        &["--defaults-only", "help", "|", "config"],
+        &["--defaults-only", "help | config"],
+    ] {
+        let filtered = run_cli_stdout(args);
+        assert!(filtered.contains("Inspect and edit runtime config"));
+        assert!(!filtered.contains("Inspect and manage plugins"));
+    }
+
     let guide = run_cli_stdout(&["--no-env", "--no-config-file", "--format=auto", "--help"]);
     assert!(guide.contains("Usage"));
     assert!(guide.contains("Commands"));

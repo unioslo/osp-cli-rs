@@ -902,8 +902,10 @@ pub(crate) fn parse_inline_command_tokens(
 }
 
 pub(crate) fn passive_command(command: clap::Command) -> clap::Command {
+    let mut command = command.disable_help_subcommand(true);
+    // Materialize generated help flags before turning their actions passive.
+    command.build();
     command
-        .disable_help_subcommand(true)
         .ignore_errors(true)
         .mut_args(|arg| match arg.get_action() {
             clap::ArgAction::Help | clap::ArgAction::HelpShort | clap::ArgAction::HelpLong => {
@@ -1038,9 +1040,8 @@ pub(crate) fn builtin_command(name: &str) -> clap::Command {
 pub(crate) fn inline_help_document(
     tokens: &[String],
     scope: &crate::core::CommandScope,
-) -> (crate::core::document::Document, bool) {
-    let (document, _, long) = command_help_document(InlineCommandCli::command(), tokens, scope);
-    (document, long)
+) -> (crate::core::document::Document, bool, bool) {
+    command_help_document(InlineCommandCli::command(), tokens, scope)
 }
 
 #[cfg(test)]

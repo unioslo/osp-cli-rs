@@ -1083,7 +1083,7 @@ fn parse_external_invocation(
 fn plan_external_invocation(
     runtime: &AppRuntime,
     _session: &AppSession,
-    parsed: ParsedCommandLine,
+    mut parsed: ParsedCommandLine,
     elevation: InvocationElevation,
     invocation: &ResolvedInvocation,
 ) -> Result<ExternalParse> {
@@ -1100,6 +1100,9 @@ fn plan_external_invocation(
         ))));
     }
 
+    if let Some(tokens) = crate::repl::input::rewrite_help_alias_tokens(&parsed.tokens) {
+        parsed.tokens = tokens;
+    }
     let inline_command = match super::command_plan::parse_inline_command(
         &parsed.tokens,
         super::command_plan::CommandSurface::External,
@@ -1108,10 +1111,17 @@ fn plan_external_invocation(
     )? {
         super::command_plan::InlineCommandPlan::Command(command) => command,
         super::command_plan::InlineCommandPlan::Help(_) => {
-            let (mut view, long_help) = crate::cli::inline_help_document(
+            let (mut view, root_help, long_help) = crate::cli::inline_help_document(
                 &parsed.tokens,
                 &invocation.ui.render_settings.runtime.command_scope,
             );
+            if root_help {
+                super::host::add_native_command_help(
+                    &mut view,
+                    &runtime.definition.native_commands,
+                    &runtime.auth,
+                );
+            }
             extend_with_invocation_help(&mut view, invocation.help_level);
             let mut output = view
                 .filtered_for_help_level(invocation.help_level)
