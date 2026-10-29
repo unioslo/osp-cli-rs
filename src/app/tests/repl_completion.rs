@@ -263,7 +263,7 @@ fn repl_shell_and_scoped_alias_completion_cover_scope_rules_unit() {
 
     state.session.scope.enter("ldap");
     let message = repl_dispatch::leave_repl_shell(&mut state.session).expect("shell should leave");
-    assert_eq!(message, "Leaving ldap shell. Back at root.\n");
+    assert_eq!(message, "Leaving ldap. Back at root.\n");
     assert!(state.session.scope.is_root());
 
     let ldap = repl::ReplParsedLine::parse("ldap", state.runtime.config.resolved())
