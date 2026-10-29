@@ -335,7 +335,7 @@ pub fn render_message(
     if level > verbosity {
         return String::new();
     }
-    if settings.format == OutputFormat::Json {
+    if settings.requested_format() == OutputFormat::Json {
         return format!(
             "{}\n",
             serde_json::json!({"messages": [{"level": level, "text": text}]})

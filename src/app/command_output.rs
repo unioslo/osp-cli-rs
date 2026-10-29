@@ -230,7 +230,22 @@ impl CommandOutput {
         Ok(())
     }
 
+    fn render_settings(&self, settings: &RenderSettings) -> RenderSettings {
+        let mut settings = settings.clone();
+        if !self.command_path.is_empty() {
+            settings.command_path.clone_from(&self.command_path);
+        }
+        settings
+    }
+
+    fn ui_for_output(&self, ui: &UiState) -> UiState {
+        let mut ui = ui.clone();
+        ui.render_settings = self.render_settings(&ui.render_settings);
+        ui
+    }
+
     pub(crate) fn output_format(&self, settings: &RenderSettings) -> OutputFormat {
+        let settings = self.render_settings(settings);
         match &self.body {
             CommandBody::Json(_) => OutputFormat::Json,
             CommandBody::Output(output) => {
@@ -240,8 +255,8 @@ impl CommandOutput {
             }
             _ => self
                 .format_hint
-                .filter(|_| settings.format == OutputFormat::Auto)
-                .unwrap_or(settings.format),
+                .filter(|_| settings.requested_format() == OutputFormat::Auto)
+                .unwrap_or(settings.requested_format()),
         }
     }
 
@@ -255,7 +270,7 @@ impl CommandOutput {
         settings: &RenderSettings,
         target: RenderTarget,
     ) -> String {
-        let mut effective = settings.clone();
+        let mut effective = self.render_settings(settings);
         let output = match &self.body {
             CommandBody::None => return String::new(),
             CommandBody::Text(text) => {
@@ -397,12 +412,11 @@ pub(crate) fn run_cli_command(
     result: &CommandOutput,
     sink: &mut dyn UiSink,
 ) -> Result<i32> {
-    let mut ui = ui.clone();
-    super::host::apply_command_format(config, &mut ui, &result.command_path);
+    let ui = result.ui_for_output(ui);
     let ui = &ui;
 
     super::sink::write_diagnostics(sink, &result.diagnostics.0, &ui.render_settings);
-    if ui.render_settings.format == OutputFormat::Json
+    if ui.render_settings.requested_format() == OutputFormat::Json
         && result.exit_code != 0
         && !result.preserve_process_output
     {
@@ -482,7 +496,11 @@ pub(crate) fn run_cli_command(
         ) {
             None
         } else {
-            crate::repl::lifecycle::hint_action(config, ui.render_settings.format, choices)
+            crate::repl::lifecycle::hint_action(
+                config,
+                ui.render_settings.requested_format(),
+                choices,
+            )
         };
         super::sink::write_diagnostics(
             sink,
@@ -659,7 +677,7 @@ pub(crate) fn emit_messages_for_ui(
     verbosity: MessageLevel,
     sink: &mut dyn UiSink,
 ) {
-    if ui.render_settings.format == OutputFormat::Json {
+    if ui.render_settings.requested_format() == OutputFormat::Json {
         let entries = messages
             .entries()
             .iter()
@@ -917,6 +935,9 @@ pub(crate) fn render_saved_repl_output(
     source: bool,
     sink: Option<&mut dyn UiSink>,
 ) -> Result<(String, CommandOutput)> {
+    let ui = output.ui_for_output(ui);
+    let ui = &ui;
+
     let mut staged = output.saved();
     staged.use_source |= source;
     staged.select_source();
@@ -955,6 +976,9 @@ pub(crate) fn render_repl_command(
     mut result: CommandOutput,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
+    let ui = result.ui_for_output(ui);
+    let ui = &ui;
+
     let saved = result.saved();
     result.select_source();
     if let Some(recording) = crate::repl::recording::current() {

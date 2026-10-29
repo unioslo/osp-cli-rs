@@ -50,7 +50,7 @@ pub(crate) fn run_theme_command(
                 .map(str::to_string)
                 .to_vec(),
             );
-            if ui.render_settings.format == crate::core::output::OutputFormat::Auto {
+            if ui.render_settings.requested_format() == crate::core::output::OutputFormat::Auto {
                 output.meta.render_recommendation = Some(RenderRecommendation::Format(
                     crate::core::output::OutputFormat::Table,
                 ));

@@ -587,11 +587,7 @@ fn run(
         return Ok(0);
     }
     if matches!(dispatch.action, RunAction::Builtin(_)) {
-        apply_command_format(
-            state.runtime.config.resolved(),
-            &mut invocation_ui.ui,
-            command_path,
-        );
+        invocation_ui.ui.render_settings.command_path = command_path.to_vec();
     }
     if !stages.is_empty()
         && matches!(
@@ -834,21 +830,6 @@ pub(crate) fn resolve_invocation_ui(
         help_level,
     }
 }
-/// Applies an exact configured default only to this invocation's settings clone.
-pub(crate) fn apply_command_format(config: &ResolvedConfig, ui: &mut UiState, path: &[String]) {
-    if ui.render_settings.format_explicit || path.is_empty() {
-        return;
-    }
-    let key = format!("ui.command_formats.{}", path.join("."));
-    if let Some(format) = config
-        .get_string(&key)
-        .and_then(crate::core::OutputFormat::parse)
-    {
-        ui.render_settings.format = format;
-        ui.render_settings.guide_default_format = false;
-    }
-}
-
 /// Maps a reported error to the CLI exit code family used by OSP.
 pub fn classify_exit_code(err: &miette::Report) -> i32 {
     let known = KnownErrorChain::inspect(err);

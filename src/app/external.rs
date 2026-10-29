@@ -87,11 +87,7 @@ pub(super) fn run_external_command(
             crate::command_words::CommandPrefixes::from_config(state.runtime.config.resolved())
                 .enabled(state.runtime.context.terminal_kind() == TerminalKind::Repl);
         let path = super::command_plan::canonical_builtin_path(prefixes, &scanned.tokens)?;
-        super::host::apply_command_format(
-            state.runtime.config.resolved(),
-            &mut invocation.ui,
-            &path,
-        );
+        invocation.ui.render_settings.command_path = path;
     }
     if let (Ok((parsed, _)), Some(scanned)) = (&expanded, &scanned)
         && crate::cli::is_help_all(&scanned.tokens)
@@ -448,11 +444,7 @@ fn run_native_invocation(
         )?;
         command_path = parsed.path.as_slice().to_vec();
         let mut invocation = invocation.clone();
-        super::host::apply_command_format(
-            state.runtime.config.resolved(),
-            &mut invocation.ui,
-            &command_path,
-        );
+        invocation.ui.render_settings.command_path = command_path.clone();
         let invocation = &invocation;
         state.runtime.auth.refresh_native_auth(&command.describe());
         ensure_external_access(&state.runtime, &parsed.path, intent.requirement, "command")?;
@@ -926,7 +918,7 @@ impl NativeProgressRenderer<'_, '_> {
         stream: bool,
     ) -> anyhow::Result<()> {
         let human = !matches!(
-            self.ui.render_settings.format,
+            self.ui.render_settings.requested_format(),
             crate::core::OutputFormat::Json
                 | crate::core::OutputFormat::Csv
                 | crate::core::OutputFormat::Tsv
@@ -1231,11 +1223,7 @@ fn run_external_plugin_command(
     state.reload_config_after_access_hook()?;
     ensure_external_access(&state.runtime, &path, requirement, "plugin command")?;
     let mut invocation = invocation.clone();
-    super::host::apply_command_format(
-        state.runtime.config.resolved(),
-        &mut invocation.ui,
-        path.as_slice(),
-    );
+    invocation.ui.render_settings.command_path = path.as_slice().to_vec();
     let invocation = &invocation;
     mark_repl_command_accepted(accepted);
     let capture = !help
@@ -1245,7 +1233,7 @@ fn run_external_plugin_command(
             .is_some_and(|d| d.output.as_deref() == Some("json"))
             || !parsed.stages.is_empty()
             || invocation.ui.render_settings.format_explicit
-            || invocation.ui.render_settings.format != crate::core::OutputFormat::Auto
+            || invocation.ui.render_settings.requested_format() != crate::core::OutputFormat::Auto
             || invocation.source);
     let mut context = plugin_dispatch_context_for(&state.runtime, Some(invocation));
     let selected_context = state

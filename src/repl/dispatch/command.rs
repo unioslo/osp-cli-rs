@@ -100,7 +100,7 @@ pub(super) fn parse_repl_invocation(
     let prefixes =
         crate::command_words::CommandPrefixes::from_config(runtime.config.resolved()).enabled(true);
     let path = app::command_plan::canonical_builtin_path(prefixes, &scoped_tokens)?;
-    app::host::apply_command_format(runtime.config.resolved(), &mut effective.ui, &path);
+    effective.ui.render_settings.command_path = path;
     let command = match app::command_plan::parse_inline_command(
         &scoped_tokens,
         app::command_plan::CommandSurface::Repl,
@@ -311,12 +311,6 @@ pub(super) fn render_repl_command_output(
     invocation: &ResolvedInvocation,
     sink: &mut dyn UiSink,
 ) -> Result<String> {
-    let mut invocation = invocation.clone();
-    app::host::apply_command_format(
-        runtime.config.resolved(),
-        &mut invocation.ui,
-        &result.command_path,
-    );
     app::render_repl_command(
         runtime.config.resolved(),
         &invocation.ui,

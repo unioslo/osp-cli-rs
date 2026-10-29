@@ -97,7 +97,7 @@ fn runtime_hints(context: &RuntimeContext, active_profile: &str, ui: &UiState) -
     RuntimeHints::new(
         ui.verbosity,
         ui.debug_level.min(3),
-        ui.render_settings.format,
+        ui.render_settings.requested_format(),
         ui.render_settings.color,
         ui.render_settings.unicode,
     )
