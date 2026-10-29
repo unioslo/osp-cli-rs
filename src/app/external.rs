@@ -447,19 +447,41 @@ fn run_native_invocation(
             let tokens = std::iter::once(name.to_string())
                 .chain(parsed.args.iter().cloned())
                 .collect::<Vec<_>>();
-            let (document, root, _) = crate::cli::command_help_document(
-                state.runtime.auth.visible_help_command(parsed.grammar, &[]),
+            let (document, _, _) = crate::cli::command_help_document(
+                state
+                    .runtime
+                    .auth
+                    .visible_help_command(parsed.grammar.clone(), &[]),
                 &tokens,
                 &invocation.ui.render_settings.runtime.command_scope,
             );
             let mut output = document.to_output_result();
             output.meta.document_command_prefixes = true;
-            if root {
-                output.meta.document_literal_commands = command
-                    .literal_commands()
-                    .iter()
-                    .map(|name| (*name).to_owned())
-                    .collect();
+            let help_tokens = crate::cli::help_parse_tokens(&tokens);
+            let help_path = native_resolved_path(&parsed.grammar, name, &help_tokens[1..], None);
+            let path = &help_path.as_slice()[1..];
+            let selected = path.iter().try_fold(&parsed.grammar, |grammar, name| {
+                grammar.find_subcommand(name)
+            });
+            if let Some(selected) = selected {
+                let names = selected
+                    .get_subcommands()
+                    .filter(|child| !child.is_hide_set())
+                    .map(clap::Command::get_name)
+                    .collect::<Vec<_>>();
+                output.meta.document_literal_commands =
+                    names
+                        .iter()
+                        .filter(|name| {
+                            let prefix = crate::command_words::shortest_prefix(name, &names);
+                            let mut args = path.to_vec();
+                            args.push(name[..prefix].to_owned());
+                            !command.normalize_invocation_args(&args, true).is_ok_and(
+                                |normalized| normalized.last().map(String::as_str) == Some(**name),
+                            )
+                        })
+                        .map(|name| (*name).to_owned())
+                        .collect();
             }
             return Ok(CommandOutput::output(output, None));
         }
