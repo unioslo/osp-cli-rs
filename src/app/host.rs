@@ -305,23 +305,19 @@ pub(crate) fn run_scanned_with_sink_and_app(
             };
             command = command.arg(arg);
         }
-        // Let the shared help grammar recognize --all before clap's automatic
-        // help subcommand interprets it as a command path.
-        let help_all = command
+        // External words use framework dispatch rather than Clap's generated
+        // help command. Builtins keep their own Clap help subcommands.
+        let external = command
             .clone()
             .disable_help_subcommand(true)
             .try_get_matches_from(scanned.argv.iter().cloned())
             .ok()
             .and_then(|matches| Cli::from_arg_matches(&matches).ok())
-            .is_some_and(|cli| match cli.command {
-                Some(Commands::External(tokens)) => crate::cli::is_help_all(&tokens),
-                _ => false,
-            });
-        if help_all {
-            command = command.disable_help_subcommand(true);
-        }
+            .is_some_and(|cli| matches!(cli.command, Some(Commands::External(_))));
         let parsed = command
-            .try_get_matches_from_mut(scanned.argv.iter().cloned())
+            .clone()
+            .disable_help_subcommand(external)
+            .try_get_matches_from(scanned.argv.iter().cloned())
             .and_then(|matches| {
                 let mut cli = Cli::from_arg_matches(&matches)?;
                 // Resolve built-in extensions before attaching one-shot stages.
@@ -1492,7 +1488,7 @@ where
     None
 }
 
-fn add_native_command_help(
+pub(super) fn add_native_command_help(
     view: &mut Document,
     native_commands: &NativeCommandRegistry,
     auth: &AuthState,
