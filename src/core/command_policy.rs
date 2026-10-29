@@ -79,11 +79,23 @@ impl CredentialState {
     }
 }
 
+/// A product-selected sign-in credential and its user-facing service name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedCredential {
+    /// Key in `SessionFacts.credentials`.
+    pub name: String,
+    /// Product-owned service label, such as "Siteadmin" or "MREG".
+    pub label: String,
+}
+
 /// Live session facts supplied by the product access hook.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionFacts {
     /// Whether the product has an authenticated session.
     pub authenticated: bool,
+    /// Credentials selected for sign-in, in product display order. An empty
+    /// selection omits the intro sign-in row; it does not change access policy.
+    pub selected_credentials: Vec<SelectedCredential>,
     /// Named credentials currently observed by the product, keyed by trimmed
     /// lowercase service names.
     pub credentials: BTreeMap<String, CredentialState>,

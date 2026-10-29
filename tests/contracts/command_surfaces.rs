@@ -319,7 +319,7 @@ theme.name = "rose-pine-moon"
     assert!(guide.contains("Keybindings"), "{guide:?}");
     assert!(guide.contains("Pipes"), "{guide:?}");
     assert!(guide.contains("Oistes"), "{guide:?}");
-    assert!(guide.contains("Not authenticated"), "{guide:?}");
+    assert!(guide.contains("Not signed in"), "{guide:?}");
     assert!(guide.contains("Rose Pine Moon"), "{guide:?}");
 }
 
@@ -377,7 +377,7 @@ theme.name = "rose-pine-moon"
     );
 
     assert!(stdout.contains("Welcome Demo!"), "{stdout}");
-    assert!(stdout.contains("User: Not authenticated"), "{stdout}");
+    assert!(stdout.contains("User: Not signed in"), "{stdout}");
     assert!(stdout.contains("Theme: Rose Pine Moon"), "{stdout}");
     assert!(stdout.contains("Show this command overview."), "{stdout}");
     assert!(stdout.contains("help"), "{stdout}");

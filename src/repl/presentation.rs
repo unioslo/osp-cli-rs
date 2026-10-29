@@ -366,6 +366,40 @@ fn resolve_intro_placeholder(
                 .unwrap_or(user)
                 .to_string();
         }
+        "session.login" => {
+            let facts = view.auth.session_facts();
+            if facts.selected_credentials.is_empty() {
+                return String::new();
+            }
+            let (ready, missing): (Vec<_>, Vec<_>) =
+                facts.selected_credentials.iter().partition(|selected| {
+                    facts
+                        .credentials
+                        .get(&selected.name)
+                        .is_some_and(|state| state.valid)
+                });
+            let value = if missing.is_empty() {
+                effective_user(view).to_string()
+            } else if ready.is_empty() {
+                "Not signed in".to_string()
+            } else {
+                format!(
+                    "{} ({}; not signed in: {})",
+                    effective_user(view),
+                    ready
+                        .into_iter()
+                        .map(|selected| selected.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    missing
+                        .into_iter()
+                        .map(|selected| selected.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            return format!("Logged in as  `{value}`\n");
+        }
         "session.user_label" => {
             return if view.auth.session_facts().authenticated {
                 "Logged in as"
@@ -378,7 +412,7 @@ fn resolve_intro_placeholder(
             return if view.auth.session_facts().authenticated {
                 effective_user(view)
             } else {
-                "Not authenticated"
+                "Not signed in"
             }
             .to_string();
         }

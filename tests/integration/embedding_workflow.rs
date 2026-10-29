@@ -82,6 +82,10 @@ impl AccessPolicy for ProductAccess {
         let credential = self.credential.lock().unwrap().clone();
         SessionFacts {
             authenticated: credential.valid,
+            selected_credentials: vec![osp_cli::core::command_policy::SelectedCredential {
+                name: "product".into(),
+                label: "Product".into(),
+            }],
             credentials: [("product".into(), credential)].into(),
         }
     }
