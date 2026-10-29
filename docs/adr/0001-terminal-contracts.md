@@ -54,3 +54,17 @@ UI activity out of ordinary machine output without dropping trace streams.
 An explicit table recommendation preserves a collection as a table even when
 it contains one record. Empty-result wording and duration formatting belong
 to display metadata; canonical payloads retain their original typed values.
+
+## Amendment: guided session cancellation (2026-10-29)
+
+Guided embedded sessions follow normal REPL Ctrl-C behavior: clear the current
+line or cancel the active command/prompt, preserving the session and its state.
+Ctrl-C never leaves a guided session. Password cancellation remains governed
+by T5. `exit` leaves; Ctrl-D and the existing guided Esc binding leave only
+on empty input. Nonempty-input editing remains editor-owned, as in T14.
+
+The existing
+`repl::engine::session::tests::interactive_signal_paths_cover_host_picker_submit_and_ctrl_events_unit`
+exercises guided cancellation. The rich-editor empty/nonempty key boundary
+is additionally checked with a real product tutorial PTY; automated guided
+PTY coverage remains UNGUARDED.

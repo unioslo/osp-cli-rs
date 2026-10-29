@@ -247,7 +247,8 @@ impl App {
     /// Return `None` for normal dispatch, `ControlFlow::Continue(text)` to
     /// print a message, or `ControlFlow::Break(code)` to leave the REPL.
     /// Consumed lines do not enter history or replace the previous command
-    /// result. The normal intro is suppressed; Ctrl-C and Esc end this REPL.
+    /// result. The normal intro is suppressed. Ctrl-C clears input or cancels
+    /// the current command; `exit`, or Ctrl-D/Esc on empty input, leaves.
     /// The line handler also runs for basic terminal input.
     pub fn with_guided_repl(
         mut self,
