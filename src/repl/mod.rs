@@ -8,6 +8,7 @@
 //! shell dispatch and debug views.
 
 mod bell;
+pub(crate) mod command_formats;
 pub(crate) mod completion;
 pub(crate) mod dispatch;
 pub(crate) use engine::read_path;

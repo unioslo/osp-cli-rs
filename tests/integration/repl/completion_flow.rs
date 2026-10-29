@@ -51,6 +51,11 @@ fn match_labels(payload: &serde_json::Value) -> Vec<String> {
 
 #[test]
 fn repl_completion_flow_tracks_committed_scope_and_consumed_flags() {
+    let forget = match_labels(&debug_complete_payload("forget theme ", &[]));
+    assert!(forget.contains(&"list".to_owned()));
+    let remember = match_labels(&debug_complete_payload("remember --l", &[]));
+    assert!(remember.contains(&"--list".to_owned()));
+
     let root_stub = match_labels(&debug_complete_payload("config", &[]));
     assert!(root_stub.contains(&"config".to_string()));
     assert!(!root_stub.contains(&"show".to_string()));

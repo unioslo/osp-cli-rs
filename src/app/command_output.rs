@@ -979,6 +979,10 @@ pub(crate) fn render_repl_command(
     let ui = result.ui_for_output(ui);
     let ui = &ui;
 
+    session.command_formats.record(
+        &result.command_path,
+        crate::repl::command_formats::explicit_format(line, config),
+    );
     let saved = result.saved();
     result.select_source();
     if let Some(recording) = crate::repl::recording::current() {

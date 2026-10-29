@@ -993,10 +993,12 @@ pub(crate) fn is_help_all(tokens: &[String]) -> bool {
         && ReplHelpCommand::try_parse_from(tokens).is_ok_and(|help| help.all)
 }
 
-pub(crate) fn repl_only_commands() -> [clap::Command; 6] {
+pub(crate) fn repl_only_commands() -> [clap::Command; 8] {
     use clap::{Arg, ArgAction, Command, ValueHint};
     [
         <ReplHelpCommand as clap::CommandFactory>::command(),
+        <crate::repl::command_formats::RememberCommand as clap::CommandFactory>::command(),
+        <crate::repl::command_formats::ForgetCommand as clap::CommandFactory>::command(),
         Command::new("last")
             .about("Replay the last successful result")
             .arg(

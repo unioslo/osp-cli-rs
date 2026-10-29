@@ -29,6 +29,8 @@ pub(crate) const REPL_GLOBAL_COMMANDS: &[&str] = &[
     "context",
     "intro",
     "last",
+    "remember",
+    "forget",
     "source",
     "each",
     "recording",
