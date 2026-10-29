@@ -79,6 +79,16 @@ pub(crate) fn build_repl_completion_tree(
         );
     }
     apply_shell_root_controls(&mut rooted.root);
+    // Dispatch accepts these exact root words in every shell. Keep them out
+    // of scoped menus and prefix resolution, but retain their grammar for
+    // highlighting and live diagnostics.
+    for spec in &surface.specs {
+        if super::input::is_repl_root_word(view.config, &spec.name) {
+            let mut node = tree.root.children[&spec.name].clone();
+            node.hidden = true;
+            rooted.root.children.insert(spec.name.clone(), node);
+        }
+    }
     Ok(rooted)
 }
 

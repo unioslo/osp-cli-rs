@@ -501,7 +501,9 @@ fn repl_completion_tree_roots_to_active_shell_scope_unit() {
     let tree =
         completion::build_repl_completion_tree(repl_view(&state.runtime, &state.session), &surface)
             .expect("repl completion tree should build");
-    assert!(!tree.root.children.contains_key("orch"));
+    for name in ["orch", "theme", "config", "plugins"] {
+        assert!(tree.root.children[name].hidden);
+    }
     assert!(tree.root.children.contains_key("provision"));
     assert!(tree.root.children.contains_key("help"));
     assert!(tree.root.children.contains_key("exit"));

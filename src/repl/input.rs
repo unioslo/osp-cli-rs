@@ -262,8 +262,7 @@ pub(crate) fn has_repl_command(
     };
     Ok(known
         || ((!view.scope.is_root())
-            && (REPL_GLOBAL_COMMANDS.contains(&word)
-                || is_repl_shellable_command(view.config, word))
+            && is_repl_root_word(view.config, word)
             && surface.specs.iter().any(|spec| spec.name == word)))
 }
 
@@ -302,6 +301,11 @@ fn blank_bytes(buffer: &mut [u8], start: usize, end: usize) {
     for byte in buffer.get_mut(start..end).into_iter().flatten() {
         *byte = b' ';
     }
+}
+
+/// Root words accepted independently of the current shell's children.
+pub(crate) fn is_repl_root_word(config: &ResolvedConfig, word: &str) -> bool {
+    REPL_GLOBAL_COMMANDS.contains(&word) || is_repl_shellable_command(config, word)
 }
 
 pub(crate) fn is_repl_shellable_command(config: &ResolvedConfig, command: &str) -> bool {
