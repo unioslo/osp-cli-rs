@@ -184,19 +184,13 @@ fn emit_prepared_entries(
         .iter()
         .filter(|row| row.role == crate::core::document::EntryRole::Command)
         .map(|row| row.key.as_str())
-        .filter(|name| {
-            !settings
-                .document_literal_commands
-                .iter()
-                .any(|literal| literal == name)
-        })
         .collect::<Vec<_>>();
     rows.iter()
         .map(|row| {
             let key = if row.role == crate::core::document::EntryRole::Command
                 && settings.color
                 && settings.command_prefixes_enabled
-                && names.contains(&row.key.as_str())
+                && !settings.document_literal_commands.contains(&row.key)
                 && !row.key.contains(char::is_whitespace)
             {
                 let prefix = crate::command_words::shortest_prefix(&row.key, &names);

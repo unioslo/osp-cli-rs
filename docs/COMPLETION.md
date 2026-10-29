@@ -103,6 +103,8 @@ The top-level command name remains exact. Exact subcommand names win over
 longer matches; ambiguous prefixes list canonical command paths. Typo hints
 never execute the suggested command. Argument values are not abbreviated.
 Native commands can reserve literal controls such as login and logout.
+Commands marked as writes require their full verb at every nesting level;
+menus and highlighting reflect that restriction.
 
 Tab works with partial input in every mode and inserts full canonical names.
 Rich help and completion menus bold the shortest executable prefix when
