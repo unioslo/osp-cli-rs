@@ -277,7 +277,8 @@ impl SuggestionEngine {
                 .as_deref()
                 .is_some_and(|preferred| node.flags.contains_key(preferred) && stub != flag)
         };
-        node.flags
+        let mut candidates = node
+            .flags
             .iter()
             .filter(|(flag, meta)| !meta.hidden && !is_hidden_alias(flag, meta))
             .filter_map(|(flag, meta)| {
@@ -302,6 +303,12 @@ impl SuggestionEngine {
                             .get(flag.as_str())
                             .is_some_and(|spellings| spellings.iter().any(|s| cmd.has_flag(s))))
             })
+            .collect::<Vec<_>>();
+        if matches!(stub, "-" | "--") && candidates.iter().any(|(_, meta, _)| !meta.global) {
+            candidates.retain(|(_, meta, _)| !meta.global);
+        }
+        candidates
+            .into_iter()
             .map(|(flag, meta, score)| Suggestion {
                 text: flag.clone(),
                 meta: if required.contains(flag.as_str()) {

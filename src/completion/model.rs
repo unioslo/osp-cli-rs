@@ -502,6 +502,8 @@ impl ValueCatalog {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[must_use]
 pub struct FlagNode {
+    /// Shared invocation flag, offered on a bare dash only without local choices.
+    pub global: bool,
     /// Recognize this flag without suggesting its name in menus.
     pub hidden: bool,
     /// Large shared catalogues searched in order; a later one is used only
