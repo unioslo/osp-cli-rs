@@ -85,15 +85,14 @@ pub(crate) fn build_repl_completion_tree(
     apply_shell_root_controls(&mut rooted.root);
     // Retain fallback root grammar without replacing shell children. REPL
     // controls keep their priority and the visible help/exit affordances.
-    let controls = super::dispatch::builtins::command_names();
+    let controls = super::dispatch::builtins::control_words();
     for spec in &surface.specs {
         if (super::input::is_repl_root_word(view.config, &spec.name)
             || controls.contains(&spec.name))
-            && (!rooted.root.children.contains_key(&spec.name)
-                || controls.contains(&spec.name)
-                || spec.name == "context")
+            && (!rooted.root.children.contains_key(&spec.name) || controls.contains(&spec.name))
         {
             let mut node = tree.root.children[&spec.name].clone();
+            // Only navigation controls are advertised in scoped menus.
             node.hidden = !matches!(spec.name.as_str(), "help" | "exit" | "quit");
             rooted.root.children.insert(spec.name.clone(), node);
         }

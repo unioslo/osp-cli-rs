@@ -17,8 +17,10 @@ use crate::app::ReplScopeStack;
 use crate::cli::invocation::{hidden_invocation_completion_flags, scan_command_tokens};
 use crate::cli::pipeline::{ParsedCommandLine, parse_command_text_with_aliases};
 
-// These utilities keep their root meaning when no shell child matches.
-// Scoped menus omit these utilities; dispatch still accepts their exact names.
+// Ordinary invocation parsing accepts these utilities without a shell prefix
+// when no shell child matches. This differs from control priority: help targets
+// retain shell scope, while flag-prefixed utilities still use the root grammar.
+// Scoped menus omit these utilities; dispatch accepts their exact names.
 pub(crate) const REPL_GLOBAL_COMMANDS: &[&str] = &[
     "plugins",
     "doctor",
@@ -81,10 +83,7 @@ impl ReplParsedLine {
                 for command in &commands[1..] {
                     node = node.and_then(|node| node.children.get(command));
                 }
-                let builtin = super::dispatch::builtins::command_names()
-                    .iter()
-                    .any(|name| name == word)
-                    || word == "context";
+                let control = super::dispatch::builtins::control_words().contains(word);
                 let prefixes =
                     crate::command_words::CommandPrefixes::from_config(config).enabled(true);
                 let child = node.and_then(|node| {
@@ -96,7 +95,7 @@ impl ReplParsedLine {
                             .map(|(name, _)| name.clone())
                     }
                 });
-                if !builtin && let Some(child) = child {
+                if !control && let Some(child) = child {
                     let mut dispatch = dispatch;
                     let position = scanned.kept_indices[index];
                     dispatch.splice(position..=position, commands.into_iter().chain([child]));
