@@ -55,7 +55,28 @@ fn repl_shell_entry_and_exit_refresh_the_prompt_scope() {
     }
     let plugins = make_temp_dir("osp-cli-pty-shell-prompt-plugins");
     let _plugin = write_provider_plugin(&plugins, "orch", "orch", "orch");
-    let mut session = spawn_repl(&plugins);
+    // Advertise overlapping host and service-root words through the plugin
+    // protocol, so shell precedence crosses the real dispatch boundary.
+    let path = plugins.join("osp-orch");
+    let script = std::fs::read_to_string(&path).unwrap();
+    let commands = ["history", "config", "theme", "plugins", "ldap", "lookup"]
+        .map(|name| serde_json::json!({"name": name, "subcommands": [{"name": "inspect"}]}));
+    std::fs::write(
+        &path,
+        script.replace(
+            "\"subcommands\":[]",
+            &format!(
+                "\"subcommands\":{}",
+                serde_json::to_string(&commands).unwrap()
+            ),
+        ),
+    )
+    .unwrap();
+    let mut session = ReplPtySession::spawn(
+        ReplPtyConfig::default().with_plugins_dir(&plugins).with_config(
+            "[default]\nrepl.shellable_commands = [\"orch\", \"ldap\"]\nalias.lookup = \"config show\"\n",
+        ),
+    );
 
     assert!(
         session.wait_for_plain_output("default>", HANG_TIMEOUT),
@@ -70,6 +91,17 @@ fn repl_shell_entry_and_exit_refresh_the_prompt_scope() {
         "expected entered shell in prompt; output:\n{}",
         session.output_snapshot(4000),
     );
+
+    for name in ["history", "config", "theme", "plugins", "ldap", "lookup"] {
+        let submitted = session.output_len();
+        session.write_bytes(format!("{name} inspect\r").as_bytes());
+        assert!(
+            session.wait_for_output_since(submitted, "orch-from-plugin", HANG_TIMEOUT),
+            "shell command {name} did not reach its provider: {}",
+            session.output_snapshot(4000)
+        );
+        assert!(session.wait_for_output_since(submitted, "default [orch]>", HANG_TIMEOUT));
+    }
 
     let left = session.output_len();
     session.write_bytes(b"exit\r");
