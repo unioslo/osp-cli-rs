@@ -1142,11 +1142,22 @@ fn human_display_metadata_preserves_typed_exports() {
             .into(),
         },
     ];
+    output.meta.display_rules.push(DisplayRule::Compose {
+        field: "action".into(),
+        parts: vec![
+            DisplayPart::Literal {
+                text: "Action: ".into(),
+            },
+            DisplayPart::Field {
+                field: String::new(),
+            },
+        ],
+    });
     let settings = crate::ui::RenderSettings::test_plain(crate::core::OutputFormat::Mreg);
     let human = crate::ui::render(&output, &crate::ui::RenderRequest::new(&settings));
     for expected in [
         "cloud",
-        "set-expiry",
+        "Action: set-expiry",
         "2s",
         "ops / web",
         "2 CPU / 8 GiB",
@@ -1166,4 +1177,25 @@ fn human_display_metadata_preserves_typed_exports() {
     let json = crate::ui::render(&output, &crate::ui::RenderRequest::new(&settings));
     let exported: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(exported, serde_json::json!([raw]));
+    output.meta.display_columns = None;
+    output.meta.display_rules = vec![DisplayRule::Compose {
+        field: String::new(),
+        parts: vec![
+            DisplayPart::Literal {
+                text: "Provider ".into(),
+            },
+            DisplayPart::Field {
+                field: "provider".into(),
+            },
+        ],
+    }];
+    let settings = crate::ui::RenderSettings::test_plain(crate::core::OutputFormat::Value);
+    assert_eq!(
+        crate::ui::render(&output, &crate::ui::RenderRequest::new(&settings)),
+        "Provider cloud:dev\n"
+    );
+    assert_eq!(
+        output.as_rows().unwrap()[0],
+        raw.as_object().unwrap().clone()
+    );
 }

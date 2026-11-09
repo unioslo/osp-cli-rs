@@ -149,8 +149,10 @@ pub enum DisplayRule {
         /// Maximum displayed Unicode character count.
         length: usize,
     },
-    /// Display an object or array as fields interspersed with literal wording.
-    /// Selectors in parts are relative to that collection, after scalar rules.
+    /// Display a value as fields interspersed with literal wording.
+    /// Selectors in parts are relative to that value, after scalar rules.
+    /// An empty part selector references the entire value. Root composition
+    /// renders through the ordinary scalar `value` row.
     Compose {
         /// Canonical object or array field selector.
         field: String,

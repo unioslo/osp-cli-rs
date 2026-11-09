@@ -898,24 +898,26 @@ fn display_output(
                     }
                     DisplayRule::Compose { field, parts } => {
                         map_display_values(&mut original, field, &|value| {
-                            if value.is_object() || value.is_array() {
-                                use crate::core::output_model::DisplayPart;
-                                let text: Option<String> = parts
-                                    .iter()
-                                    .map(|part| match part {
-                                        DisplayPart::Literal { text } => Some(text.clone()),
-                                        DisplayPart::Field { field } => display_path(value, field)
-                                            .map(|value| {
-                                                value
-                                                    .as_str()
-                                                    .and_then(super::format_local_timestamp)
-                                                    .unwrap_or_else(|| display_value(value))
-                                            }),
+                            use crate::core::output_model::DisplayPart;
+                            let text: Option<String> = parts
+                                .iter()
+                                .map(|part| match part {
+                                    DisplayPart::Literal { text } => Some(text.clone()),
+                                    DisplayPart::Field { field } => (if field.is_empty() {
+                                        Some(&*value)
+                                    } else {
+                                        display_path(value, field)
                                     })
-                                    .collect();
-                                if let Some(text) = text {
-                                    *value = Value::String(text);
-                                }
+                                    .map(|value| {
+                                        value
+                                            .as_str()
+                                            .and_then(super::format_local_timestamp)
+                                            .unwrap_or_else(|| display_value(value))
+                                    }),
+                                })
+                                .collect();
+                            if let Some(text) = text {
+                                *value = Value::String(text);
                             }
                         });
                     }
@@ -991,6 +993,9 @@ fn display_output(
             }
             if color && !matches!(format, OutputFormat::Value | OutputFormat::Markdown) {
                 apply_swatches(&mut original, &raw, &output.meta.display_rules);
+            }
+            if !original.is_object() {
+                original = serde_json::json!({"value": original});
             }
             *row = if let Some(columns) = &output.meta.display_columns {
                 let labels = display_labels(output, columns);
