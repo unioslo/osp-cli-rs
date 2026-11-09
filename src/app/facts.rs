@@ -146,9 +146,8 @@ pub(crate) fn set_command_scope(runtime: &mut AppRuntime, scope: &super::ReplSco
             None => crate::core::CommandScope::ReplRoot,
             Some(root) => crate::core::CommandScope::ReplShell {
                 root,
-                root_words: crate::repl::dispatch::builtins::command_names()
+                root_words: crate::repl::dispatch::builtins::control_words()
                     .into_iter()
-                    .chain(["context".to_string()])
                     .collect(),
             },
         },

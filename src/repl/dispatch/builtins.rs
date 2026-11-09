@@ -52,6 +52,14 @@ pub(crate) fn command_names() -> Vec<String> {
         .collect()
 }
 
+/// Words that retain their REPL meaning even when the shell has a matching child.
+pub(crate) fn control_words() -> Vec<String> {
+    command_names()
+        .into_iter()
+        .chain(["context".to_string()])
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SourceCommand {
     paths: Vec<PathBuf>,
