@@ -17,7 +17,7 @@ use crate::app::ReplScopeStack;
 use crate::cli::invocation::{hidden_invocation_completion_flags, scan_command_tokens};
 use crate::cli::pipeline::{ParsedCommandLine, parse_command_text_with_aliases};
 
-// These commands keep their root meaning inside every integration shell.
+// These utilities keep their root meaning when no shell child matches.
 // Scoped menus omit these utilities; dispatch still accepts their exact names.
 pub(crate) const REPL_GLOBAL_COMMANDS: &[&str] = &[
     "plugins",
@@ -52,6 +52,63 @@ impl ReplParsedLine {
             )
         })?;
         Ok(Self::from_parsed(parsed))
+    }
+
+    /// Resolve real shell children before root aliases and host utilities.
+    pub(crate) fn parse_in_scope(
+        line: &str,
+        config: &ResolvedConfig,
+        scope: &ReplScopeStack,
+        catalog: &[crate::plugin::CommandCatalogEntry],
+    ) -> Result<Self> {
+        if !scope.is_root() {
+            let pipeline = crate::dsl::parse::pipeline::parse_pipeline(line).into_diagnostic()?;
+            let tokens = shell_words::split(&pipeline.command).into_diagnostic()?;
+            let scanned = scan_command_tokens(&tokens)?;
+            let index = usize::from(scanned.tokens.first().map(String::as_str) == Some("sudo"));
+            let dispatch = scanned
+                .kept_indices
+                .get(index)
+                .and_then(|position| rewrite_help_alias_tokens_at(&tokens, *position))
+                .unwrap_or(tokens);
+            let scanned = scan_command_tokens(&dispatch)?;
+            if let Some(word) = scanned.tokens.get(index) {
+                let commands = scope.commands();
+                let mut node = catalog
+                    .iter()
+                    .find(|entry| entry.name == commands[0])
+                    .map(|entry| &entry.completion);
+                for command in &commands[1..] {
+                    node = node.and_then(|node| node.children.get(command));
+                }
+                let builtin = super::dispatch::builtins::command_names()
+                    .iter()
+                    .any(|name| name == word)
+                    || word == "context";
+                let prefixes =
+                    crate::command_words::CommandPrefixes::from_config(config).enabled(true);
+                let child = node.and_then(|node| {
+                    if prefixes {
+                        node.resolve_child(word).map(|(name, _)| name.to_owned())
+                    } else {
+                        node.children
+                            .get_key_value(word)
+                            .map(|(name, _)| name.clone())
+                    }
+                });
+                if !builtin && let Some(child) = child {
+                    let mut dispatch = dispatch;
+                    let position = scanned.kept_indices[index];
+                    dispatch.splice(position..=position, commands.into_iter().chain([child]));
+                    crate::cli::pipeline::validate_cli_dsl_stages(&pipeline.stages)?;
+                    return Ok(Self::from_parsed(ParsedCommandLine {
+                        tokens: dispatch,
+                        stages: pipeline.stages,
+                    }));
+                }
+            }
+        }
+        Self::parse(line, config)
     }
 
     pub(crate) fn requests_repl_help(&self) -> bool {

@@ -168,8 +168,12 @@ arrive later. Selections remain scoped to the active identity and profile.
 ## Shell Scope
 
 Suggested commands match the current prompt. Inside `orch`, both `task …` and
-`orch task …` work unless a host command or alias shadows the relative first
-word. `help task` resolves in the current scope just like `task …`.
+`orch task …` work. A command of the current shell wins over a host command,
+another service root, or an alias with the same first word. REPL controls
+(`help`, `exit`/`quit`, `last`, `each`, `source`, `remember`, `forget`,
+`recording`, pagination, and `context`) retain their REPL meaning. Leave the
+shell with `exit` to reach a colliding root command. `help task` resolves in the
+current scope just like `task …`.
 Suggestions for another root keep their root form; leave the current shell
 before running them. JSON follow-ups in the REPL use the same form, while
 one-shot output uses `osp …`.
@@ -204,8 +208,8 @@ ldap
 The second `ldap` is interpreted as `ldap --help`.
 
 Shells do not nest. Typing another shell's root switches to it: inside `orch`,
-`nh` leaves the `orch` shell and enters the `nh` shell, and `exit` returns to
-root.
+`nh` leaves the `orch` shell and enters the `nh` shell unless `nh` is an
+`orch` command. `exit` returns to root.
 
 Inside a shell, `help` and `--help` show that scope's command help, followed
 by an Everywhere section naming the canonical global REPL commands in root

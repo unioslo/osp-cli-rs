@@ -14,7 +14,7 @@ pub enum CommandScope {
     ReplShell {
         /// The shell's root command.
         root: String,
-        /// Host commands and aliases resolved before shell scope.
+        /// REPL controls that retain their meaning inside shell scope.
         root_words: BTreeSet<String>,
     },
 }

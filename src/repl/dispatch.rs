@@ -249,28 +249,40 @@ fn execute_repl_line_inner(
                 result => return Ok(ExecutedReplLine::flat(result, state.runtime.ui.debug_level)),
             }
         }
+        let catalog = if state.session.scope.is_root() {
+            Vec::new()
+        } else {
+            crate::app::authorized_command_catalog_for(
+                &state.runtime.auth,
+                &state.clients,
+                state.clients.native_commands().completion_catalog(),
+            )
+        };
         // Alias expansion needs the live execution config, which the generic
         // history backend does not own. Classify before a command can edit it.
-        privacy_allows_history =
-            input::ReplParsedLine::parse(&resolved, state.runtime.config.resolved()).is_ok_and(
-                |parsed| {
-                    if super::history_store::has_sensitive_arguments(&parsed.dispatch_tokens) {
-                        return false;
-                    }
-                    let tokens = parsed.prefixed_tokens(&state.session.scope);
-                    let Ok(scanned) = scan_command_tokens(&tokens) else {
-                        return false;
-                    };
-                    let tokens = scanned
-                        .tokens
-                        .strip_prefix(&["sudo".to_owned()])
-                        .unwrap_or(&scanned.tokens);
-                    tokens
-                        .first()
-                        .and_then(|root| state.clients.native_commands().command(root))
-                        .is_none_or(|native| !native.has_sensitive_args(&tokens[1..]))
-                },
-            );
+        privacy_allows_history = input::ReplParsedLine::parse_in_scope(
+            &resolved,
+            state.runtime.config.resolved(),
+            &state.session.scope,
+            &catalog,
+        )
+        .is_ok_and(|parsed| {
+            if super::history_store::has_sensitive_arguments(&parsed.dispatch_tokens) {
+                return false;
+            }
+            let tokens = parsed.prefixed_tokens(&state.session.scope);
+            let Ok(scanned) = scan_command_tokens(&tokens) else {
+                return false;
+            };
+            let tokens = scanned
+                .tokens
+                .strip_prefix(&["sudo".to_owned()])
+                .unwrap_or(&scanned.tokens);
+            tokens
+                .first()
+                .and_then(|root| state.clients.native_commands().command(root))
+                .is_none_or(|native| !native.has_sensitive_args(&tokens[1..]))
+        });
         admitted = super::history::admits_repl_line(state, &resolved);
         if let Some(rest) = line.trim_start().strip_prefix("osp")
             && rest.starts_with(char::is_whitespace)
@@ -300,6 +312,7 @@ fn execute_repl_line_inner(
             &state.runtime,
             &state.session,
             state.clients.native_commands(),
+            &catalog,
             &resolved,
         )?;
         let parse_finished = Instant::now();
@@ -530,6 +543,7 @@ fn classify_repl_line(
     runtime: &AppRuntime,
     session: &AppSession,
     native_commands: &crate::NativeCommandRegistry,
+    catalog: &[crate::plugin::CommandCatalogEntry],
     line: &str,
 ) -> Result<ReplLinePlan> {
     // 1. Classify builtins and blank lines before any normal parsing.
@@ -539,7 +553,12 @@ fn classify_repl_line(
     }
 
     // 2. Parse the line into REPL-local command/stage shape.
-    let mut parsed = parse_repl_dispatch_line(runtime, line)?;
+    let mut parsed = input::ReplParsedLine::parse_in_scope(
+        line,
+        runtime.config.resolved(),
+        &session.scope,
+        catalog,
+    )?;
     let scoped = scan_command_tokens(&parsed.prefixed_tokens(&session.scope))?;
     let tokens = scoped
         .tokens
@@ -558,7 +577,12 @@ fn classify_repl_line(
             if prepared != command.raw {
                 let mut rewritten = line.to_owned();
                 rewritten.replace_range(command.span.start..command.span.end, &prepared);
-                parsed = parse_repl_dispatch_line(runtime, &rewritten)?;
+                parsed = input::ReplParsedLine::parse_in_scope(
+                    &rewritten,
+                    runtime.config.resolved(),
+                    &session.scope,
+                    catalog,
+                )?;
             }
         }
     }
@@ -610,10 +634,6 @@ fn classify_builtin_or_blank(raw: &str) -> Result<Option<ReplLinePlan>> {
     }
 
     Ok(None)
-}
-
-fn parse_repl_dispatch_line(runtime: &AppRuntime, line: &str) -> Result<input::ReplParsedLine> {
-    input::ReplParsedLine::parse(line, runtime.config.resolved())
 }
 
 fn classify_repl_local_plan(
@@ -789,6 +809,7 @@ pub(crate) fn classify_repl_line_kind(
         runtime,
         session,
         &crate::NativeCommandRegistry::default(),
+        &[],
         line,
     )?
     .kind())

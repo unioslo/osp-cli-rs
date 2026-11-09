@@ -508,6 +508,55 @@ fn repl_completion_tree_roots_to_active_shell_scope_unit() {
     assert!(tree.root.children.contains_key("help"));
     assert!(tree.root.children.contains_key("exit"));
     assert!(tree.root.children.contains_key("quit"));
+
+    // The same shell vocabulary drives dispatch and completion, including
+    // names also owned by the host, service roots, and configured aliases.
+    let mut state = make_completion_state_with_entries(&[("alias.lookup", "config show")]);
+    state.session.scope.enter("orch");
+    let mut catalog = sample_catalog();
+    let shell = catalog
+        .iter_mut()
+        .find(|entry| entry.name == "orch")
+        .unwrap();
+    for name in [
+        "history", "config", "theme", "plugins", "ldap", "orch", "lookup",
+    ] {
+        let mut node = crate::completion::CompletionNode {
+            name: name.to_string(),
+            ..Default::default()
+        };
+        node.children.insert(
+            "inspect".to_string(),
+            crate::completion::CompletionNode {
+                name: "inspect".to_string(),
+                ..Default::default()
+            },
+        );
+        shell.completion.children.insert(name.to_string(), node);
+    }
+    let engine = completion_engine_for(&state, &catalog);
+    for name in [
+        "history", "config", "theme", "plugins", "ldap", "orch", "lookup",
+    ] {
+        let line = format!("{name} inspect");
+        let parsed = repl::ReplParsedLine::parse_in_scope(
+            &line,
+            state.runtime.config.resolved(),
+            &state.session.scope,
+            &catalog,
+        )
+        .unwrap();
+        assert_eq!(parsed.dispatch_tokens, ["orch", name, "inspect"]);
+        assert_eq!(complete_values(&engine, &format!("{name} ")), ["inspect"]);
+        let help = repl::ReplParsedLine::parse_in_scope(
+            &format!("help {name}"),
+            state.runtime.config.resolved(),
+            &state.session.scope,
+            &catalog,
+        )
+        .unwrap();
+        assert_eq!(help.dispatch_tokens, ["orch", name, "--help"]);
+    }
 }
 
 #[test]

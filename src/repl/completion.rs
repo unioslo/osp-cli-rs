@@ -83,13 +83,18 @@ pub(crate) fn build_repl_completion_tree(
         );
     }
     apply_shell_root_controls(&mut rooted.root);
-    // Dispatch accepts these exact root words in every shell. Keep them out
-    // of scoped menus and prefix resolution, but retain their grammar for
-    // highlighting and live diagnostics.
+    // Retain fallback root grammar without replacing shell children. REPL
+    // controls keep their priority and the visible help/exit affordances.
+    let controls = super::dispatch::builtins::command_names();
     for spec in &surface.specs {
-        if super::input::is_repl_root_word(view.config, &spec.name) {
+        if (super::input::is_repl_root_word(view.config, &spec.name)
+            || controls.contains(&spec.name))
+            && (!rooted.root.children.contains_key(&spec.name)
+                || controls.contains(&spec.name)
+                || spec.name == "context")
+        {
             let mut node = tree.root.children[&spec.name].clone();
-            node.hidden = true;
+            node.hidden = !matches!(spec.name.as_str(), "help" | "exit" | "quit");
             rooted.root.children.insert(spec.name.clone(), node);
         }
     }
